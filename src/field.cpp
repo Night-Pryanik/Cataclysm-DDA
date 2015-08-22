@@ -2310,10 +2310,16 @@ void map::monster_in_field( monster &z )
 
                 if (tries == 10) {
                     z.die_in_explosion( nullptr );
-                } else if( monster * const other = g->critter_at<monster>( newpos ) ) {
-                    if (g->u.sees(z)) {
-                        add_msg(_("The %1$s teleports into a %2$s, killing them both!"),
-                                   z.name().c_str(), other->name().c_str());
+                } else {
+                    int mon_hit = g->mon_at(newpos);
+                    if (mon_hit != -1) {
+                        if (g->u.sees(z)) {
+                            add_msg(_("The %1$s teleports into a %2$s, killing them both!"),
+                                       z.name().c_str(), g->zombie(mon_hit).name().c_str());
+                        }
+                        g->zombie( mon_hit ).die_in_explosion( &z );
+                    } else {
+                        z.setpos(newpos);
                     }
                     other->die_in_explosion( &z );
                 } else {

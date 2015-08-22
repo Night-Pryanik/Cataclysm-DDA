@@ -975,18 +975,16 @@ bool monster::move_to( const tripoint &p, bool force, const float stagger_adjust
             if( flies ) {
                 moves -= 100;
                 force = true;
-                if( g->u.sees( *this ) ) {
-                    add_msg( _( "The %1$s flies over the %2$s." ), name().c_str(),
-                             g->m.has_flag_furn( "CLIMBABLE", p ) ? g->m.furnname( p ).c_str() :
-                             g->m.tername( p ).c_str() );
+                if (g->u.sees( *this )){
+                    add_msg(_("The %1$s flies over the %2$s."), name().c_str(),
+                    g->m.has_flag_furn("CLIMBABLE", p) ? g->m.furnname(p).c_str() : g->m.tername(p).c_str());
                 }
             } else if( has_flag( MF_CLIMBS ) ) {
                 moves -= 150;
                 force = true;
-                if( g->u.sees( *this ) ) {
-                    add_msg( _( "The %1$s climbs over the %2$s." ), name().c_str(),
-                             g->m.has_flag_furn( "CLIMBABLE", p ) ? g->m.furnname( p ).c_str() :
-                             g->m.tername( p ).c_str() );
+                if (g->u.sees( *this )){
+                    add_msg(_("The %1$s climbs over the %2$s."), name().c_str(),
+                    g->m.has_flag_furn("CLIMBABLE", p) ? g->m.furnname(p).c_str() : g->m.tername(p).c_str());
                 }
             }
         }
@@ -1226,7 +1224,7 @@ bool monster::push_to( const tripoint &p, const int boost, const size_t depth )
     critter->add_effect( effect_stunned, rng( 0, 2 ) );
     // Only print the message when near player or it can get spammy
     if( rl_dist( g->u.pos(), pos() ) < 4 && g->u.sees( *critter ) ) {
-        add_msg( m_warning, _( "The %1$s tramples %2$s" ),
+        add_msg( m_warning, _("The %1$s tramples %2$s"),
                  name().c_str(), critter->disp_name().c_str() );
     }
 
@@ -1368,7 +1366,7 @@ void monster::knock_back_from( const tripoint &p )
         add_effect( effect_stunned, 2 );
         if( u_see ) {
             add_msg( _( "The %1$s bounces off a %2$s." ), name().c_str(),
-                     g->m.obstacle_name( to ).c_str() );
+                     g->m.tername( to ).c_str() );
         }
 
     } else { // It's no wall

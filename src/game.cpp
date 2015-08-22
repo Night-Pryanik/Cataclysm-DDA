@@ -4073,24 +4073,19 @@ void game::debug()
             debug_menu::wishmutate( &u );
             break;
 
-        case 10:
-            if( m.veh_at( u.pos() ) ) {
-                dbg( D_ERROR ) << "game:load: There's already vehicle here";
-                debugmsg( "There's already vehicle here" );
-            } else {
-                std::vector<vproto_id> veh_strings;
-                uimenu veh_menu;
-                veh_menu.text = _( "Choose vehicle to spawn" );
-                veh_menu.return_invalid = true;
-                int menu_ind = 0;
-                for( auto & elem : vehicle_prototype::get_all() ) {
-                    if( elem != vproto_id( "custom" ) ) {
-                        const vehicle_prototype &proto = elem.obj();
-                        veh_strings.push_back( elem );
-                        //~ Menu entry in vehicle wish menu: 1st string: displayed name, 2nd string: internal name of vehicle
-                        veh_menu.addentry( menu_ind, true, MENU_AUTOASSIGN, _( "%1$s (%2$s)" ), _( proto.name.c_str() ), elem.c_str() );
-                        ++menu_ind;
-                    }
+    case 10:
+        if (m.veh_at(u.pos())) {
+            dbg(D_ERROR) << "game:load: There's already vehicle here";
+            debugmsg("There's already vehicle here");
+        } else {
+            std::vector<vproto_id> veh_strings;
+            for( auto &elem : vehicle_prototype::get_all() ) {
+                if( elem != vproto_id( "custom" ) ) {
+                    const vehicle_prototype &proto = elem.obj();
+                    veh_strings.push_back( elem );
+                    //~ Menu entry in vehicle wish menu: 1st string: displayed name, 2nd string: internal name of vehicle
+                    opts.push_back( string_format( _( "%1$s (%2$s)" ), proto.name.c_str(),
+                                                   elem.c_str() ) );
                 }
                 veh_menu.addentry( menu_ind, true, MENU_AUTOASSIGN, _( "Cancel" ) );
                 veh_menu.query();
@@ -7392,7 +7387,7 @@ bool pet_menu(monster *z)
         }
 
         if (max_weight <= 0) {
-            add_msg(_("%1$s is overburdened. You can't transfer your %2$s."),
+            add_msg(_("%1$s is overburdened. You can't transfer your %2$s"),
                     pet_name.c_str(), it->tname(1).c_str());
             return true;
         }
@@ -9608,11 +9603,45 @@ void game::handle_all_liquid( item liquid, const int radius )
     }
 }
 
-bool game::consume_liquid( item &liquid, const int radius )
-{
-    const auto original_charges = liquid.charges;
-    while( liquid.charges > 0 && handle_liquid( liquid, nullptr, radius ) ) {
-        // try again with the remaining charges
+    if( vehicle_near( liquid.type->id ) && query_yn(_("Refill vehicle?")) ) {
+        tripoint vp;
+        refresh_all();
+        if (!choose_adjacent(_("Refill vehicle where?"), vp)) {
+            return false;
+        }
+        vehicle *veh = m.veh_at(vp);
+        if (veh == NULL) {
+            add_msg(m_info, _("There isn't any vehicle there."));
+            return false;
+        }
+        const itype_id &ftype = liquid.type->id;
+        int fuel_cap = veh->fuel_capacity(ftype);
+        int fuel_amnt = veh->fuel_left(ftype);
+        if (fuel_cap <= 0) {
+            add_msg(m_info, _("The %1$s doesn't use %2$s."),
+                    veh->name.c_str(), liquid.type_name().c_str());
+            return false;
+        } else if (fuel_amnt >= fuel_cap) {
+            add_msg(m_info, _("The %s is already full."),
+                    veh->name.c_str());
+            return false;
+        } else if (from_ground && query_yn(_("Pump until full?"))) {
+            u.assign_activity(ACT_REFILL_VEHICLE, 2 * (fuel_cap - fuel_amnt));
+            u.activity.placement = vp;
+            return false; // Liquid is not handled by this function, but by the activity!
+        }
+        const int amt = infinite ? INT_MAX : liquid.charges;
+        u.moves -= 100;
+        liquid.charges = veh->refill(ftype, amt);
+        if (veh->fuel_left(ftype) < fuel_cap) {
+            add_msg(_("You refill the %1$s with %2$s."),
+                    veh->name.c_str(), liquid.type_name().c_str());
+        } else {
+            add_msg(_("You refill the %1$s with %2$s to its maximum."),
+                    veh->name.c_str(), liquid.type_name().c_str());
+        }
+        // infinite: always handled all, to prevent loops
+        return infinite || liquid.charges == 0;
     }
     return original_charges != liquid.charges;
 }
@@ -9683,24 +9712,17 @@ bool game::handle_liquid( item &liquid, item * const source, const int radius,
 
     const std::string liquid_name = liquid.display_name( liquid.charges );
 
-    uimenu menu;
-    menu.return_invalid = true;
-    if( source_pos != nullptr ) {
-        menu.text = string_format( _( "What to do with the %s from %s?" ), liquid_name.c_str(), m.name( *source_pos ).c_str() );
-    } else if( source_veh != nullptr ) {
-        menu.text = string_format( _( "What to do with the %s from the %s?" ), liquid_name.c_str(), source_veh->name.c_str() );
-    } else {
-        menu.text = string_format( _( "What to do with the %s?" ), liquid_name.c_str() );
-    }
-    std::vector<std::function<void()>> actions;
+        if (ammo != liquid_type) {
+            add_msg(m_info, _("Your %1$s won't hold %2$s."), cont->tname().c_str(),
+                    liquid.tname().c_str());
+            return false;
+        }
 
-    if( u.can_consume( liquid ) ) {
-        menu.addentry( -1, true, 'e', _( "Consume it" ) );
-        actions.emplace_back( [&]() {
-            // consume_item already consumes moves.
-            u.consume_item( liquid );
-        } );
-    }
+        if (max <= 0 || cont->charges >= max) {
+            add_msg(m_info, _("Your %1$s can't hold any more %2$s."), cont->tname().c_str(),
+                    liquid.tname().c_str());
+            return false;
+        }
 
     // This handles containers found anywhere near the player, including on the map and in vehicle storage.
     menu.addentry( -1, true, 'c', _( "Pour into a container" ) );
@@ -9708,9 +9730,19 @@ bool game::handle_liquid( item &liquid, item * const source, const int radius,
         item_location target = game_menus::inv::container_for( u, liquid, radius );
         item *const cont = target.get_item();
 
-        if( cont == nullptr || cont->is_null() ) {
-            add_msg( _( "Never mind." ) );
-            return;
+        add_msg(_("You pour %1$s into the %2$s."), liquid.tname().c_str(), cont->tname().c_str());
+        cont->set_curammo( liquid );
+        if (infinite) {
+            cont->charges = max;
+        } else {
+            cont->charges += liquid.charges;
+            if (cont->charges > max) {
+                long extra = cont->charges - max;
+                cont->charges = max;
+                liquid.charges = extra;
+                add_msg(_("There's some left over!"));
+                return false;
+            }
         }
         if( cont == source && source != nullptr ) {
             add_msg( m_info, _( "That's the same container!" ) );
@@ -9740,15 +9772,10 @@ bool game::handle_liquid( item &liquid, item * const source, const int radius,
         }
     } );
 
-    // This handles liquids stored in vehicle parts directly (e.g. tanks).
-    std::set<vehicle *> opts;
-    for( const auto &e : g->m.points_in_radius( g->u.pos(), 1 ) ) {
-        auto veh = g->m.veh_at( e );
-        if( veh && std::any_of( veh->parts.begin(), veh->parts.end(), [&liquid]( const vehicle_part &pt ) {
-            // cannot refill using active liquids (those that rot) due to #18570
-            return !liquid.active && pt.can_reload( liquid.typeId() );
-        } ) ) {
-            opts.insert( veh );
+        u.inv.unsort();
+        add_msg( _( "You pour %1$s into the %2$s." ), liquid.tname().c_str(), cont->tname().c_str() );
+        if( !infinite && liquid.charges > 0 ) {
+            add_msg( _( "There's some left over!" ) );
         }
     }
     for( auto veh : opts ) {
@@ -9784,30 +9811,52 @@ bool game::handle_liquid( item &liquid, item * const source, const int radius,
         } );
     }
 
-    menu.addentry( -1, true, 'g', _( "Pour on the ground" ) );
-    actions.emplace_back( [&]() {
-        // From infinite source to the ground somewhere else. The target has
-        // infinite space and the liquid can not be used from there anyway.
-        if( liquid.has_infinite_charges() && source_pos != nullptr ) {
-            add_msg( m_info, _( "Clearing out the %s would take forever." ), m.name( *source_pos ).c_str() );
-            return;
-        }
+            ammotype liquid_type = liquid.ammo_type();
 
-        tripoint target_pos = u.pos();
-        const std::string liqstr = string_format( _( "Pour %s where?" ), liquid_name.c_str() );
+            if (ammo != liquid_type) {
+                add_msg(m_info, _("Your %1$s won't hold %2$s."), cont->tname().c_str(),
+                        liquid.tname().c_str());
+                return -1;
+            }
+
+            if (max <= 0 || cont->charges >= max) {
+                add_msg(m_info, _("Your %1$s can't hold any more %2$s."), cont->tname().c_str(),
+                        liquid.tname().c_str());
+                return -1;
+            }
 
         refresh_all();
         if( !choose_adjacent( liqstr, target_pos ) ) {
             return;
         }
 
-        if( source_pos != nullptr && *source_pos == target_pos ) {
-            add_msg( m_info, _( "That's where you took it from!" ) );
-            return;
-        }
-        if( !m.can_put_items_ter_furn( target_pos ) ) {
-            add_msg( m_info, _( "You can't pour there!" ) );
-            return;
+            add_msg(_("You pour %1$s into your %2$s."), liquid.tname().c_str(),
+                    cont->tname().c_str());
+            cont->set_curammo( liquid );
+            cont->charges += liquid.charges;
+            if (cont->charges > max) {
+                long extra = cont->charges - max;
+                cont->charges = max;
+                add_msg(_("There's some left over!"));
+                return extra;
+            } else {
+                return 0;
+            }
+        } else {
+            item tmp_liquid = liquid;
+            std::string err;
+            if( !cont->fill_with( tmp_liquid, err ) ) {
+                add_msg( m_info, "%s", err.c_str() );
+                return -1;
+            }
+            u.inv.unsort();
+            if( tmp_liquid.charges == 0 ) {
+                add_msg(_("You pour %1$s into your %2$s."), liquid.tname().c_str(), cont->type_name().c_str());
+            } else {
+                add_msg(_("You fill your %1$s with some of the %2$s."), cont->type_name().c_str(), liquid.tname().c_str());
+                add_msg(_("There's some left over!"));
+            }
+            return tmp_liquid.charges;
         }
 
         if( create_activity() ) {
@@ -9866,6 +9915,71 @@ void game::plthrow( int pos )
         return;
     }
 
+    bool can_move_there = m.move_cost(dir) != 0;
+
+    itype_id first = itype_id(dropped[0].type->id);
+    bool same = true;
+    for (std::vector<item>::iterator it = dropped.begin() + 1;
+         it != dropped.end() && same; ++it) {
+        if (it->type->id != first) {
+            same = false;
+        }
+    }
+
+    if (dropped.size() == 1 || same) {
+        int dropcount = (dropped[0].count_by_charges()) ? dropped[0].charges : 1;
+
+        if (to_veh) {
+            add_msg(ngettext("You put your %1$s in the %2$s's %3$s.",
+                             "You put your %1$s in the %2$s's %3$s.", dropcount),
+                    dropped[0].tname(dropcount).c_str(),
+                    veh->name.c_str(),
+                    veh->part_info(veh_part).name.c_str());
+        } else if (can_move_there) {
+            add_msg(ngettext("You drop your %1$s on the %2$s.",
+                             "You drop your %1$s on the %2$s.", dropcount),
+                    dropped[0].tname(dropcount).c_str(),
+                    m.name(dir).c_str());
+        } else {
+            add_msg(ngettext("You put your %1$s in the %2$s.",
+                             "You put your %1$s in the %2$s.", dropcount),
+                    dropped[0].tname(dropcount).c_str(),
+                    m.name(dir).c_str());
+        }
+    } else {
+        if (to_veh) {
+            add_msg(_("You put several items in the %1$s's %2$s."),
+                    veh->name.c_str(), veh->part_info(veh_part).name.c_str());
+        } else if (can_move_there) {
+            add_msg(_("You drop several items on the %s."),
+                    m.name(dir).c_str());
+        } else {
+            add_msg(_("You put several items in the %s."),
+                    m.name(dir).c_str());
+        }
+    }
+
+    if (to_veh) {
+        bool vh_overflow = false;
+        for( auto &elem : dropped ) {
+            vh_overflow = vh_overflow || !veh->add_item( veh_part, elem );
+            if (vh_overflow) {
+                m.add_item_or_charges( dir, elem, 1 );
+            }
+        }
+        if (vh_overflow) {
+            add_msg (m_warning, _("The trunk is full, so some items fall on the ground."));
+        }
+    } else {
+        for( auto &elem : dropped ) {
+            m.add_item_or_charges( dir, elem, 2 );
+        }
+    }
+    u.moves -= drop_move_cost;
+}
+
+void game::reassign_item( int pos )
+{
     if( pos == INT_MIN ) {
         pos = inv_for_all( _( "Throw item" ), _( "You don't have any items to throw." ) );
         refresh_all();
@@ -9946,6 +10060,45 @@ bool game::plfire_check( const targeting_data &args ) {
             if(u.activity) {
               u.cancel_activity();
             }
+        }
+        // get a list of holsters from worn items
+        std::vector<item *> holsters;
+        for( auto &worn : u.worn ) {
+            if( ((worn.type->can_use("HOLSTER_GUN") && !worn.has_flag("NO_QUICKDRAW")) ||
+                 worn.type->can_use("HOLSTER_ANKLE")) &&
+                (!worn.contents.empty() && worn.contents[0].is_gun()) ) {
+                holsters.push_back(&worn);
+            }
+        }
+        // TODO: Turret vs. holster choice
+        if( !holsters.empty() ) {
+            int choice = -1;
+            // only one holster found, choose it
+            if( holsters.size() == 1 ) {
+                choice = 0;
+                // ask player which holster to draw from
+            } else {
+                std::vector<std::string> choices;
+                for( auto i : holsters ) {
+                    choices.push_back(string_format(_("%s from %s (%d)"),
+                                                    i->contents[0].tname().c_str(),
+                                                    i->type_name(1).c_str(),
+                                                    i->contents[0].charges));
+                }
+                choice = (uimenu(false, _("Draw what?"), choices)) - 1;
+            }
+
+            if (choice > -1) {
+                u.wield_contents(holsters[choice], true,  holsters[choice]->skill(), 13);
+                u.add_msg_if_player(_("You pull your %1$s from its %2$s and ready it to fire."),
+                                    u.weapon.tname().c_str(), holsters[choice]->type_name(1).c_str());
+                if (u.weapon.charges <= 0) {
+                    u.add_msg_if_player(_("... but it's empty!"));
+                    return;
+                }
+            }
+        }
+    }
 
             return false;
         }
@@ -11516,16 +11669,24 @@ bool game::walk_move( const tripoint &dest_loc )
     u.recoil = std::max( MIN_RECOIL * 2, u.recoil );
     u.recoil = int(u.recoil / 2);
 
-    // Print a message if movement is slow
-    const int mcost_to = m.move_cost( dest_loc ); //calculate this _after_ calling grabbed_move
-    const bool slowed = ( !u.has_trait( trait_id( "PARKOUR" ) ) && ( mcost_to > 2 || mcost_from > 2 ) ) ||
-                  mcost_to > 4 || mcost_from > 4;
-    if( slowed ) {
-        // Unless u.pos() has a higher movecost than dest_loc, state that dest_loc is the cause
-        if( mcost_to >= mcost_from ) {
-            if( veh_there ) {
-                add_msg( m_warning, _( "Moving onto this %s is slow!" ),
-                         veh_there->part_info( vpart_there ).name().c_str() );
+                    if ( shifting_furniture ) { // we didn't move
+                        if ( abs( u.grab_point.x + dx ) < 2 && abs( u.grab_point.y + dy ) < 2 ) {
+                            u.grab_point = {u.grab_point.x + dx, u.grab_point.y + dy, 0}; // furniture moved relative to us
+                        } else { // we pushed furniture out of reach
+                            add_msg( _("You let go of the %s"), furntype.name.c_str() );
+                            u.grab_point = {0, 0, 0};
+                            u.grab_type = OBJECT_NONE;
+                        }
+                        return false; // We moved furniture but stayed still.
+                    } else if ( pushing_furniture &&
+                                m.move_cost(x, y) <= 0 ) { // Not sure how that chair got into a wall, but don't let player follow.
+                        add_msg( _("You let go of the %1$s as it slides past %2$s"),
+                                 furntype.name.c_str(), m.ter_at(x, y).name.c_str() );
+                        u.grab_point = {0, 0, 0};
+                        u.grab_type = OBJECT_NONE;
+                    }
+                }
+                // Unsupported!
             } else {
                 add_msg( m_warning, _( "Moving onto this %s is slow!"), m.name( dest_loc ).c_str() );
             }
@@ -11838,25 +11999,13 @@ bool game::phasing_move( const tripoint &dest_loc )
             return false;
         }
 
-        dest.x += dx;
-        dest.y += dy;
-    }
-
-    if( tunneldist != 0 ) {
-        if( u.in_vehicle ) {
-            m.unboard_vehicle( u.pos() );
-        }
-
-        add_msg(_("You quantum tunnel through the %d-tile wide barrier!"), tunneldist);
-        u.charge_power(-(tunneldist * 250)); //tunneling costs 250 bionic power per impassable tile
-        u.moves -= 100; //tunneling costs 100 moves
-        u.setpos( dest );
-
-        int vpart;
-        const vehicle *veh = m.veh_at( u.pos(), vpart );
-        if( veh != nullptr &&
-            veh->part_with_feature(vpart, "BOARDABLE") >= 0) {
-            m.board_vehicle( u.pos(), &u );
+    } else if (veh_closed_door) {
+        if (outside_vehicle) {
+            veh1->open_all_at(dpart);
+        } else {
+            veh1->open(dpart);
+            add_msg(_("You open the %1$s's %2$s."), veh1->name.c_str(),
+                    veh1->part_info(dpart).name.c_str());
         }
 
         u.grab_point = tripoint_zero;
@@ -12979,10 +13128,9 @@ void game::update_stair_monsters()
             } else {
                 if( critter.staircount > 0 ) {
                     dump << (from_below ?
-                             //~ The <monster> is almost at the <bottom/top> of the <terrain type>!
                              string_format(_("The %1$s is almost at the top of the %2$s!"),
                                            critter.name().c_str(),
-                                           m.tername(dest).c_str()) :
+                                           m.tername(mposx, mposy).c_str()) :
                              string_format(_("The %1$s is almost at the bottom of the %2$s!"),
                                            critter.name().c_str(),
                                            m.tername(dest).c_str()));
@@ -13101,7 +13249,7 @@ void game::update_stair_monsters()
                     other.moves -= 50;
                     std::string msg = "";
                     if (one_in(creature_throw_resist)) {
-                        other.add_effect( effect_downed, 2);
+                        other.add_effect("downed", 2);
                         msg = _("The %1$s pushed the %2$s hard.");
                     } else {
                         msg = _("The %1$s pushed the %2$s.");
@@ -13292,7 +13440,7 @@ void game::teleport(player *p, bool add_teleglow)
                                     m.obstacle_name( new_pos ).c_str() );
             } else {
                 add_msg(_("%1$s teleports into the middle of a %2$s!"),
-                        p->name.c_str(), m.obstacle_name( new_pos ).c_str() );
+                        p->name.c_str(), m.name(newx, newy).c_str());
             }
         }
         p->apply_damage( nullptr, bp_torso, 500 );

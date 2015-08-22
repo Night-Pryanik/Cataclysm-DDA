@@ -2215,8 +2215,7 @@ void iexamine::keg(player &p, const tripoint &examp)
                 drink_index = -1;
             }
         } else { //Only one drink type was in inventory, so it's automatically used
-            if( !query_yn( _( "Fill the %1$s with %2$s?" ),
-                           g->m.name( examp ).c_str(), drink_names[0].c_str() ) ) {
+            if (!query_yn(_("Fill the %1$s with %2$s?"), m->name(examp).c_str(), drink_names[0].c_str())) {
                 drink_index = -1;
             }
         }
@@ -2236,11 +2235,11 @@ void iexamine::keg(player &p, const tripoint &examp)
             keg_full = drink.volume() >= keg_cap;
         }
         if( keg_full ) {
-            add_msg( _( "You completely fill the %1$s with %2$s." ),
-                    g->m.name( examp ).c_str(), drink.tname().c_str() );
+            add_msg(_("You completely fill the %1$s with %2$s."),
+                    m->name(examp).c_str(), drink.tname().c_str());
         } else {
-            add_msg( _( "You fill the %1$s with %2$s." ), g->m.name( examp ).c_str(),
-                    drink.tname().c_str() );
+            add_msg(_("You fill the %1$s with %2$s."), m->name(examp).c_str(),
+                    drink.tname().c_str());
         }
         p.moves -= 250;
         g->m.i_clear( examp );
@@ -2273,9 +2272,10 @@ void iexamine::keg(player &p, const tripoint &examp)
 
         switch( static_cast<options>( selectmenu.ret ) ) {
         case FILL_CONTAINER:
-            if( g->handle_liquid_from_ground( drink, examp ) ) {
-                add_msg(_("You squeeze the last drops of %1$s from the %2$s."), drink_name.c_str(),
-                        g->m.name(examp).c_str());
+            if( g->handle_liquid(*drink, true, false) ) {
+                add_msg(_("You squeeze the last drops of %1$s from the %2$s."), drink->tname().c_str(),
+                        m->name(examp).c_str());
+                m->i_clear( examp );
             }
             return;
 
@@ -2286,8 +2286,8 @@ void iexamine::keg(player &p, const tripoint &examp)
 
             if (drink->charges == 0) {
                 add_msg(_("You squeeze the last drops of %1$s from the %2$s."), drink->tname().c_str(),
-                        g->m.name(examp).c_str());
-                g->m.i_clear( examp );
+                        m->name(examp).c_str());
+                m->i_clear( examp );
             }
             p.moves -= 250;
             return;
@@ -2300,13 +2300,21 @@ void iexamine::keg(player &p, const tripoint &examp)
             }
             if (charges_held < 1) {
                 add_msg(m_info, _("You don't have any %1$s to fill the %2$s with."),
-                        drink->tname().c_str(), g->m.name(examp).c_str());
+                        drink->tname().c_str(), m->name(examp).c_str());
                 return;
             }
-            item tmp( drink->typeId(), calendar::turn, charges_held );
-            pour_into_keg( examp, tmp );
-            p.use_charges( drink->typeId(), charges_held - tmp.charges );
-            add_msg(_("You fill the %1$s with %2$s."), g->m.name(examp).c_str(),
+            for (int i = 0; i < charges_held; i++) {
+                p->use_charges(drink->typeId(), 1);
+                drink->charges++;
+                int d_vol = drink->volume(false, true) / 1000;
+                if (d_vol >= keg_cap) {
+                    add_msg(_("You completely fill the %1$s with %2$s."), m->name(examp).c_str(),
+                            drink->tname().c_str());
+                    p->moves -= 250;
+                    return;
+                }
+            }
+            add_msg(_("You fill the %1$s with %2$s."), m->name(examp).c_str(),
                     drink->tname().c_str());
             p.moves -= 250;
             return;
@@ -2385,9 +2393,18 @@ void pick_plant(player &p, const tripoint &examp,
 
 void iexamine::tree_hickory(player &p, const tripoint &examp)
 {
-    harvest_common( p, examp, false, false );
-    if( !p.has_quality( quality_id( "DIG" ) ) ) {
-        p.add_msg_if_player(m_info, _("You have no tool to dig with..."));
+    if ( ((p->has_trait("PROBOSCIS")) || (p->has_trait("BEAK_HUM"))) &&
+         ((p->hunger) > 0) && (!(p->wearing_something_on(bp_mouth))) &&
+         (calendar::turn.get_season() == SUMMER || calendar::turn.get_season() == SPRING) ) {
+        p->moves -= 100; // Need to find a blossom (assume there's one somewhere)
+        add_msg(_("You find a flower and drink some nectar."));
+        p->hunger -= 15;
+    }
+    //if the fruit is not ripe yet
+    if (calendar::turn.get_season() != m->get_ter_harvest_season(examp)) {
+        std::string fruit = item::nname(m->get_ter_harvestable(examp), 10);
+        fruit[0] = toupper(fruit[0]);
+        add_msg(m_info, _("%1$s ripen in %2$s."), fruit.c_str(), season_name(m->get_ter_harvest_season(examp)).c_str());
         return;
     }
     if( p.is_player () && !query_yn( _( "Dig up %s? This kills the tree!" ), g->m.tername( examp ).c_str() ) ) {
@@ -2818,8 +2835,8 @@ void iexamine::reload_furniture(player &p, const tripoint &examp)
     }
     const int amount_in_furn = count_charges_in_list( ammo, g->m.i_at( examp ) );
     if( amount_in_furn > 0 ) {
-        //~ %1$s - furniture, %2$d - number, %3$s items.
-        add_msg(_("The %1$s contains %2$d %3$s."), f.name.c_str(), amount_in_furn, ammo->nname(amount_in_furn).c_str());
+        //~ The <piece of furniture> contains <number> <items>.
+        add_msg(_("The %1$s contains %d %2$s."), f.name.c_str(), amount_in_furn, ammo->nname(amount_in_furn).c_str());
     }
     const int max_amount_in_furn = f.max_volume / ammo->volume;
     const int max_reload_amount = max_amount_in_furn - amount_in_furn;

@@ -208,8 +208,24 @@ bool player::check_eligible_containers_for_crafting( const recipe &rec, int batc
 
 bool is_container_eligible_for_crafting( const item &cont, bool allow_bucket )
 {
-    if( cont.is_watertight_container() || ( allow_bucket && cont.is_bucket() ) ) {
-        return !cont.is_container_full( allow_bucket );
+    const int turns = batch_time(batch) / 100;
+    std::string text;
+    if( turns < MINUTES( 1 ) ) {
+        const int seconds = std::max( 1, turns * 6 );
+        text = string_format( ngettext( "%d second", "%d seconds", seconds ), seconds );
+    } else {
+        const int minutes = ( turns % HOURS( 1 ) ) / MINUTES( 1 );
+        const int hours = turns / HOURS( 1 );
+        if( hours == 0 ) {
+            text = string_format( ngettext( "%d minute", "%d minutes", minutes ), minutes );
+        } else if( minutes == 0 ) {
+            text = string_format( ngettext( "%d hour", "%d hours", hours ), hours );
+        } else {
+            const std::string h = string_format( ngettext( "%d hour", "%d hours", hours ), hours );
+            const std::string m = string_format( ngettext( "%d minute", "%d minutes", minutes ), minutes );
+            //~ A time duration: first is hours, second is minutes, e.g. "4 hours" "6 minutes"
+            text = string_format( _( "%1$s and %2$s" ), h.c_str(), m.c_str() );
+        }
     }
 
     return false;
@@ -1275,9 +1291,9 @@ void player::complete_disassemble( int item_pos, const tripoint &loc,
             const bool dmg_success = component_success_chance > rng_float( 0, 1 );
             if( !dmg_success ) {
                 // Show reason for failure (damaged item, tname contains the damage adjective)
-                //~ %1s - material, %2$s - disassembled item
-                add_msg( m_bad, _( "You fail to recover %1$s from the %2$s." ), newit.tname().c_str(),
-                         dis_item.tname().c_str() );
+		//~ %1s - material, %2$s - disassembled item
+                add_msg(m_bad, _("You fail to recover %1$s from the %2$s."), newit.tname().c_str(),
+                        dis_item.tname().c_str());
                 continue;
             }
             // Use item from components list, or (if not contained)

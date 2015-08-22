@@ -5129,6 +5129,474 @@ int iuse::spray_can(player *p, item *it, bool, const tripoint& )
 
 int iuse::handle_ground_graffiti(player *p, item *it, const std::string prefix)
 {
+    std::string message = string_input_popup( prefix + " " + _("(To delete, input one '.')"),
+                                              0, "", "", "graffiti" );
+
+    if( message.empty() ) {
+        return 0;
+    } else {
+        const auto where = p->pos3();
+        int move_cost;
+        if( message == "." ) {
+            if( g->m.has_graffiti_at( where ) ) {
+                move_cost = 3 * g->m.graffiti_at( where ).length();
+                g->m.delete_graffiti( where );
+                add_msg( _("You manage to get rid of the message on the ground.") );
+            } else {
+                add_msg( _("There isn't anything to erase here.") );
+                return 0;
+            }
+        } else {
+            g->m.set_graffiti( where, message );
+            add_msg( _("You write a message on the ground.") );
+            move_cost = 2 * message.length();
+        }
+        p->moves -= move_cost;
+    }
+
+    return it->type->charges_to_use();
+}
+
+/**
+ * Heats up a food item.
+ * @return 1 if an item was heated, false if nothing was heated.
+ */
+static bool heat_item(player *p)
+{
+    int inventory_index = g->inv_for_filter( _("Heat up what?"), []( const item & itm ) {
+        return (itm.is_food() && itm.has_flag("EATEN_HOT")) ||
+            (itm.is_food_container() && itm.contents[0].has_flag("EATEN_HOT"));
+    } );
+    item *heat = &( p->i_at(inventory_index ) );
+    if (heat->type->id == "null") {
+        add_msg(m_info, _("You do not have that item!"));
+        return false;
+    }
+    item *target = heat->is_food_container() ? &(heat->contents[0]) : heat;
+    if ((target->is_food()) && (target->has_flag("EATEN_HOT"))) {
+        p->moves -= 300;
+        add_msg(_("You heat up the food."));
+        target->item_tags.insert("HOT");
+        target->active = true;
+        target->item_counter = 600; // sets the hot food flag for 60 minutes
+        return true;
+    }
+    add_msg(m_info, _("You can't heat that up!"));
+    return false;
+}
+
+int iuse::heatpack(player *p, item *it, bool, const tripoint& )
+{
+    if (heat_item(p)) {
+        it->make("heatpack_used");
+    }
+    return 0;
+}
+
+int iuse::hotplate(player *p, item *it, bool, const tripoint& )
+{
+    if ( it->type->id != "atomic_coffeepot" && (it->charges < it->type->charges_to_use()) ) {
+        p->add_msg_if_player(m_info, _("The %s's batteries are dead."), it->tname().c_str());
+        return 0;
+    }
+
+    int choice = 1;
+    if ((p->has_effect("bite") || p->has_effect("bleed") || p->has_trait("MASOCHIST") ||
+         p->has_trait("MASOCHIST_MED") || p->has_trait("CENOBITE")) && !p->is_underwater()) {
+        //Might want to cauterize
+        choice = menu(true, _("Using hotplate:"), _("Heat food"), _("Cauterize wound"), _("Cancel"), NULL);
+    }
+
+    if (choice == 1) {
+        if (heat_item(p)) {
+            return it->type->charges_to_use();
+        }
+    } else if (choice == 2) {
+        return cauterize_elec(p, it);
+    }
+    return 0;
+}
+
+int iuse::quiver(player *p, item *it, bool, const tripoint& )
+{
+    int choice = -1;
+    if (!(it->contents.empty()) && it->contents[0].charges > 0) {
+        choice = menu(true, _("Do what with quiver?"), _("Store more arrows"),
+                      _("Empty quiver"), _("Cancel"), NULL);
+
+        // empty quiver
+        if (choice == 2) {
+            item &arrows = it->contents[0];
+            int arrowsRemoved = arrows.charges;
+            p->add_msg_if_player(ngettext("You remove the %1$s from the %2$s.", "You remove the %1$s from the %2$s.",
+                                          arrowsRemoved),
+                                 arrows.type_name( arrowsRemoved ).c_str(), it->tname().c_str());
+            p->inv.assign_empty_invlet(arrows, false);
+            p->i_add(arrows);
+            it->contents.erase(it->contents.begin());
+            return it->type->charges_to_use();
+        }
+    }
+
+    // if quiver is empty or storing more arrows, pull up menu asking what to store
+    if (it->contents.empty() || choice == 1) {
+        int inventory_index = g->inv_for_filter( _("Store which arrows?"), []( const item & itm ) {
+            return itm.is_ammo() && (itm.ammo_type() == "arrow" || itm.ammo_type() == "bolt");
+        } );
+        item *put = &( p->i_at(inventory_index ) );
+        if (put == NULL || put->is_null()) {
+            p->add_msg_if_player(_("Never mind."));
+            return 0;
+        }
+
+        if (!(put->is_ammo() && (put->ammo_type() == "arrow" || put->ammo_type() == "bolt"))) {
+            p->add_msg_if_player(m_info, _("Those aren't arrows!"));
+            return 0;
+        }
+
+        int maxArrows = it->max_charges_from_flag("QUIVER");
+        if (maxArrows == 0) {
+            debugmsg("Tried storing arrows in quiver without a QUIVER_n tag (iuse::quiver)");
+            return 0;
+        }
+
+        int arrowsStored = 0;
+
+        // not empty so adding more arrows
+        if (!(it->contents.empty()) && it->contents[0].charges > 0) {
+            if (it->contents[0].type->id != put->type->id) {
+                p->add_msg_if_player(m_info, _("Those aren't the same arrows!"));
+                return 0;
+            }
+            if (it->contents[0].charges >= maxArrows) {
+                p->add_msg_if_player(m_info, _("That %s is already full!"), it->tname().c_str());
+                return 0;
+            }
+            arrowsStored = it->contents[0].charges;
+            it->contents[0].charges += put->charges;
+            p->i_rem(put);
+
+            // empty, putting in new arrows
+        } else {
+            it->put_in(p->i_rem(put));
+        }
+
+        // handle overflow
+        if (it->contents[0].charges > maxArrows) {
+            int toomany = it->contents[0].charges - maxArrows;
+            it->contents[0].charges -= toomany;
+            item clone = it->contents[0];
+            clone.charges = toomany;
+            p->i_add(clone);
+        }
+
+        arrowsStored = it->contents[0].charges - arrowsStored;
+        p->add_msg_if_player(ngettext("You store %d %1$s in your %2$s.", "You store %d %1$s in your %2$s.",
+                                      arrowsStored),
+                             arrowsStored, it->contents[0].type_name( arrowsStored ).c_str(), it->tname().c_str());
+        p->moves -= 10 * arrowsStored;
+    } else {
+        p->add_msg_if_player(_("Never mind."));
+        return 0;
+    }
+    return it->type->charges_to_use();
+}
+
+int iuse::holster_gun(player *p, item *it, bool, const tripoint& )
+{
+    // if holster is empty, pull up menu asking what to holster
+    if (it->contents.empty()) {
+        int maxvol = 0;
+        // TODO: extract into an item function
+        const auto iter = it->type->properties.find( "holster_size" );
+        if( iter != it->type->properties.end() && iter->second != "0" ) {
+            maxvol = std::atoi( iter->second.c_str() );
+        }
+        int minvol = maxvol / 3;
+
+        auto filter = [maxvol, minvol]( const item &it ) {
+            return it.is_gun() && it.volume() <= maxvol && it.volume() >= minvol && (it.skill() != "archery");
+        };
+        int const inventory_index = g->inv_for_filter( _("Holster what?"), filter );
+        item &put = p->i_at( inventory_index );
+        if( put.is_null() ) {
+            p->add_msg_if_player(_("Never mind."));
+            return 0;
+        }
+
+        // make sure we're holstering a pistol
+        if (!put.is_gun()) {
+            p->add_msg_if_player(m_info, _("That isn't a gun!"), put.tname().c_str());
+            return 0;
+        }
+
+        // make sure we're not holstering bows / crossbows
+        if (put.skill() == "archery") {
+            p->add_msg_if_player(m_info, _("You can't holster your %s!"), put.tname().c_str());
+            return 0;
+        }
+
+        // only allow guns smaller than a certain size
+        if (put.volume() > maxvol) {
+            p->add_msg_if_player(m_info, _("That holster is too small to hold your %s!"),
+                                 put.tname().c_str());
+            return 0;
+        } else if (put.volume() < minvol) {
+          p->add_msg_if_player(m_info, _("That holster is too big to hold your %s!"),
+                              put.tname().c_str());
+          return 0;
+        }
+
+        std::string const gun_skill = put.gun_skill();
+        int const lvl = p->skillLevel( gun_skill );
+        std::string message;
+        if (lvl < 2) {
+            message = _("You clumsily holster your %s.");
+        } else if (lvl >= 7) {
+            message = _("You deftly holster your %s.");
+        } else  {
+            message = _("You holster your %s.");
+        }
+
+        p->add_msg_if_player(message.c_str(), put.tname().c_str());
+        p->store(it, &put, gun_skill, 14);
+
+    } else if( &p->weapon == it ) {
+        p->add_msg_if_player( _( "You need to unwield the %s before using it." ), it->tname().c_str() );
+        return 0;
+        // else draw the holstered gun and have the player wield it
+    } else {
+        if (!p->is_armed() || p->wield(NULL)) {
+            item &gun = it->contents[0];
+            auto t_gun = gun.type->gun.get();
+            int lvl = p->skillLevel(t_gun->skill_used);
+            std::string message;
+            if (lvl < 2) {
+                message = _("You clumsily draw your %1$s from the %2$s.");
+            } else if (lvl >= 7) {
+                message = _("You quickly draw your %1$s from the %2$s.");
+            } else {
+                message = _("You draw your %1$s from the %2$s.");
+            }
+
+            p->add_msg_if_player(message.c_str(), gun.tname().c_str(), it->tname().c_str());
+            p->wield_contents(it, true, t_gun->skill_used->ident(), 13);
+        }
+    }
+    return it->type->charges_to_use();
+}
+
+int iuse::sheath_knife(player *p, item *it, bool, const tripoint& )
+{
+    // if sheath is empty, pull up menu asking what to sheathe
+    if (it->contents.empty()) {
+        // only show SHEATH_KNIFE items
+        int inventory_index = g->inv_for_flag("SHEATH_KNIFE", _("Sheathe what?"), false);
+        item *put = &(p->i_at(inventory_index));
+        if (put == NULL || put->is_null()) {
+            p->add_msg_if_player(_("Never mind."));
+            return 0;
+        }
+
+        if (!put->has_flag("SHEATH_KNIFE")) {
+            if (put->has_flag("SHEATH_SWORD")) {
+                p->add_msg_if_player(m_info, _("You need a scabbard to sheathe a sword!"),
+                                     put->tname().c_str());
+            } else {
+                p->add_msg_if_player(m_info, _("You can't sheathe your %s!"), put->tname().c_str());
+            }
+            return 0;
+        }
+
+        int maxvol = 5;
+        if (it->type->id == "bootstrap") { // bootstrap can't hold as much as sheath
+            maxvol = 3;
+        }
+
+        // only allow knives smaller than a certain size
+        if (put->volume() > maxvol) {
+            p->add_msg_if_player(m_info, _("That sheath is too small to hold your %s!"), put->tname().c_str());
+            return 0;
+        }
+
+        int lvl = p->skillLevel("cutting");
+        std::string message;
+        if (lvl < 2) {
+            message = _("You clumsily shove your %1$s into the %2$s.");
+        } else if (lvl >= 5) {
+            message = _("You deftly insert your %1$s into the %2$s.");
+        } else {
+            message = _("You put your %1$s into the %2$s.");
+        }
+
+        p->add_msg_if_player(message.c_str(), put->tname().c_str(), it->tname().c_str());
+        p->store(it, put, "cutting", 14);
+
+    } else if( &p->weapon == it ) {
+        p->add_msg_if_player( _( "You need to unwield the %s before using it." ), it->tname().c_str() );
+        return 0;
+        // else unsheathe a sheathed weapon and have the player wield it
+    } else {
+        if (!p->is_armed() || p->wield(NULL)) {
+            p->wield_contents(it, true, "cutting", 13);
+
+            int lvl = p->skillLevel("cutting");
+            std::string message;
+            if (lvl < 2) {
+                message = _("You clumsily draw your %1$s from the %2$s.");
+            } else if (lvl >= 5) {
+                message = _("You deftly draw your %1$s from the %2$s.");
+            } else {
+                message = _("You draw your %1$s from the %2$s.");
+            }
+
+            p->add_msg_if_player(message.c_str(), p->weapon.tname().c_str(), it->tname().c_str());
+
+            // diamond knives glimmer in the sunlight
+            if (g->is_in_sunlight(p->pos()) && (p->weapon.made_of("diamond") ||
+                    p->weapon.type->id == "foon" || p->weapon.type->id == "spork")) {
+                p->add_msg_if_player(_("The %s glimmers magnificently in the sunlight."),
+                                     p->weapon.tname().c_str());
+            }
+        }
+    }
+    return it->type->charges_to_use();
+}
+
+int iuse::sheath_sword(player *p, item *it, bool, const tripoint& )
+{
+    // if sheath is empty, pull up menu asking what to sheathe
+    if (it->contents.empty()) {
+        // only show SHEATH_SWORD items
+        int inventory_index = g->inv_for_flag("SHEATH_SWORD", _("Sheathe what?"), false);
+        item *put = &(p->i_at(inventory_index));
+        if (put == NULL || put->is_null()) {
+            p->add_msg_if_player(_("Never mind."));
+            return 0;
+        }
+
+        if (!put->has_flag("SHEATH_SWORD")) {
+            if (put->has_flag("SHEATH_KNIFE")) {
+                p->add_msg_if_player(m_info, _("You need a knife sheath for that!"), put->tname().c_str());
+            } else {
+                p->add_msg_if_player(m_info, _("You can't sheathe your %s!"), put->tname().c_str());
+            }
+            return 0;
+        }
+
+        int lvl = p->skillLevel("cutting");
+        std::string message;
+        if (lvl < 2) {
+            message = _("You clumsily sheathe your %s.");
+        } else if (lvl >= 7) {
+            message = _("You deftly sheathe your %s.");
+        } else {
+            message = _("You sheathe your %s.");
+        }
+
+        p->add_msg_if_player(message.c_str(), put->tname().c_str());
+        p->store(it, put, "cutting", 14);
+
+    } else if( &p->weapon == it ) {
+        p->add_msg_if_player( _( "You need to stop wielding the %s before using it." ), it->tname().c_str() );
+        return 0;
+        // else unsheathe a sheathed weapon and have the player wield it
+    } else {
+        if (!p->is_armed() || p->wield(NULL)) {
+            int lvl = p->skillLevel("cutting");
+            p->wield_contents(it, true, "cutting", 13);
+
+            // in order to perform iaijutsu, have to pass a roll based on level
+            bool iaijutsu =
+                lvl >= 7 &&
+                p->weapon.has_flag("IAIJUTSU") &&
+                one_in(12 - lvl);
+
+            // iaijutsu! slash an enemy as you draw your sword
+            if (iaijutsu) {
+                // check for adjacent enemies before asking to slash
+                int mon_num = -1;
+                for (int i = -1; i <= 1; i++) {
+                    for (int j = -1; j <= 1; j++) {
+                        tripoint dest( p->posx() + i, p->posy() + j, p->posz() );
+                        mon_num = g->mon_at( dest, true );
+                        if (mon_num != -1) {
+                            break; // break at first found enemy
+                        }
+                    }
+                    if (mon_num != -1) {
+                        break;
+                    }
+                }
+
+                // if there's an adjacent enemy, ask which one to slash
+                // if a spot without an enemy is chosen, defaults to the first enemy found above
+                if (mon_num != -1) {
+                    tripoint slashp;
+                    if (choose_adjacent(_("Slash where?"), slashp)) {
+                        const int mon_hit = g->mon_at( slashp, true );
+                        if (mon_hit != -1) {
+                            mon_num = mon_hit;
+                        }
+                    }
+                    monster &zed = g->zombie(mon_num);
+                    p->add_msg_if_player(m_good, _("You slash at the %1$s as you draw your %2$s."),
+                                         zed.name().c_str(), p->weapon.tname().c_str());
+                    p->melee_attack(zed, true);
+                } else {
+                    // no adjacent monsters, draw sword normally
+                    iaijutsu = false;
+                }
+            }
+
+            // draw sword normally
+            if (!iaijutsu) {
+                std::string message;
+                if (lvl < 2) {
+                    message = _("You clumsily draw your %s.");
+                } else if (lvl >= 7) {
+                    message = _("You masterfully draw your %s.");
+                } else {
+                    message = _("You draw your %s.");
+                }
+
+                p->add_msg_if_player(message.c_str(), p->weapon.tname().c_str());
+            }
+
+            // Glow/Glimmer
+            if (p->weapon.has_flag("VORPAL") &&p->weapon.has_technique( matec_id( "VORPAL" ) ) &&
+                  !x_in_y(g->natural_light_level(), 40)) {
+                std::string part = "";
+                int roll = rng(1,3);
+                switch (roll) {
+                case 1:
+                    part = _("snatching claws");
+                    break;
+                case 2:
+                    part = _("snapping teeth");
+                    break;
+                case 3:
+                    part = _("eyes of flame");
+                    break;
+                }
+
+                //~ $1s is a body part, %2$s is the weapon name.
+                p->add_msg_if_player(_("You catch a glimpse of %1$s in the blade of the %2$s"),
+                                      part.c_str(), p->weapon.tname().c_str());
+
+            // diamond swords glimmer in the sunlight
+            } else if (g->is_in_sunlight(p->pos()) && p->weapon.made_of("diamond")) {
+                p->add_msg_if_player(_("The %s glimmers magnificently in the sunlight."),
+                                     p->weapon.tname().c_str());
+            }
+        }
+    }
+
+    return handle_ground_graffiti(p, it, ismarker ? _("Write what?") : _("Spray what?"));
+}
+
+int iuse::handle_ground_graffiti(player *p, item *it, const std::string prefix)
+{
     std::string message = string_input_popup()
                           .title( prefix + " " + _( "(To delete, input one '.')" ) )
                           .identifier( "graffiti" )
@@ -7622,7 +8090,7 @@ int iuse::cable_attach(player *p, item *it, bool, const tripoint& )
             target_part.target.second = source_veh->real_global_pos3();
             target_veh->install_part(vcoords.x, vcoords.y, target_part);
 
-            if( p != nullptr && p->has_item( *it ) ) {
+            if( p != nullptr && p->has_item(it) ) {
                 p->add_msg_if_player(m_good, _("You link up the electric systems of the %1$s and the %2$s."),
                                      source_veh->name.c_str(), target_veh->name.c_str());
             }
@@ -7662,21 +8130,17 @@ int iuse::weather_tool( player *p, item *it, bool, const tripoint& )
         p->add_msg_if_player( m_neutral, _( "The %s's monitor slowly outputs the data..." ),
                               it->tname().c_str() );
     }
-    if( it->has_flag( "THERMOMETER" ) ) {
-        if( it->typeId() == "thermometer" ) {
-            p->add_msg_if_player( m_neutral, _( "The %1$s reads %2$s." ), it->tname().c_str(),
-                                  print_temperature( g->get_temperature() ).c_str() );
+    if (it->has_flag("THERMOMETER")) {
+        if (it->type->id == "thermometer") {
+            p->add_msg_if_player(m_neutral, _("The %1$s reads %2$s."), it->tname().c_str(), print_temperature(g->get_temperature()).c_str());
         } else {
             p->add_msg_if_player( m_neutral, _( "Temperature: %s." ),
                                   print_temperature( g->get_temperature() ).c_str() );
         }
     }
-    if( it->has_flag( "HYGROMETER" ) ) {
-        if( it->typeId() == "hygrometer" ) {
-            p->add_msg_if_player(
-                m_neutral, _( "The %1$s reads %2$s." ), it->tname().c_str(),
-                print_humidity( get_local_humidity( weatherPoint.humidity, g->weather,
-                                                    g->is_sheltered( g->u.pos() ) ) ).c_str() );
+    if (it->has_flag("HYGROMETER")) {
+        if (it->type->id == "hygrometer") {
+            p->add_msg_if_player(m_neutral, _("The %1$s reads %2$s."), it->tname().c_str(), print_humidity(get_local_humidity(weatherPoint.humidity, g->weather, g->is_sheltered(g->u.pos()))).c_str());
         } else {
             p->add_msg_if_player(
                 m_neutral, _( "Relative Humidity: %s." ),
@@ -7684,11 +8148,9 @@ int iuse::weather_tool( player *p, item *it, bool, const tripoint& )
                                                     g->is_sheltered( g->u.pos() ) ) ).c_str() );
         }
     }
-    if( it->has_flag( "BAROMETER" ) ) {
-        if( it->typeId() == "barometer" ) {
-            p->add_msg_if_player(
-                m_neutral, _( "The %1$s reads %2$s." ), it->tname().c_str(),
-                print_pressure( (int)weatherPoint.pressure ).c_str() );
+    if (it->has_flag("BAROMETER")) {
+        if (it->type->id == "barometer") {
+            p->add_msg_if_player(m_neutral, _("The %1$s reads %2$s."), it->tname().c_str(), print_pressure((int)weatherPoint.pressure).c_str());
         } else {
             p->add_msg_if_player( m_neutral, _( "Pressure: %s." ),
                                   print_pressure( (int)weatherPoint.pressure ).c_str() );
@@ -7780,17 +8242,7 @@ int iuse::capture_monster_act( player *p, item *it, bool, const tripoint &pos )
         if( mon_dex != -1 ) {
             monster f = g->zombie( mon_dex );
 
-            if( !it->has_property("monster_size_capacity") ) {
-                debugmsg( "%s has no monster_size_capacity.", it->tname().c_str() );
-                return 0;
-            }
-            const std::string capacity = it->get_property_string( "monster_size_capacity" );
-            if( Creature::size_map.count( capacity ) == 0 ) {
-                debugmsg( "%s has invalid monster_size_capacity %s.",
-                          it->tname().c_str(), capacity.c_str() );
-                return 0;
-            }
-            if( f.get_size() > Creature::size_map.find( capacity )->second ) {
+            if( f.get_size() > Creature::size_map.at(iter->second) ) {
                 p->add_msg_if_player( m_info, _("The %1$s is too big to put in your %2$s."),
                                       f.type->nname().c_str(), it->tname().c_str() );
                 return 0;

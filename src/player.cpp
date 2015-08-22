@@ -2258,25 +2258,25 @@ void player::memorial( std::ostream &memorial_file, std::string epitaph )
     std::string kill_place;
     if( !closest_city ) {
         //~ First parameter is a pronoun ("He"/"She"), second parameter is a terrain name.
-        kill_place = string_format( _( "%1$s was killed in a %2$s in the middle of nowhere." ),
-                                    pronoun.c_str(), tername.c_str() );
+        kill_place = string_format(_("%1$s was killed in a %2$s in the middle of nowhere."),
+                     pronoun.c_str(), tername.c_str());
     } else {
         const auto &nearest_city = *closest_city.city;
         //Give slightly different messages based on how far we are from the middle
         const int distance_from_city = closest_city.distance - nearest_city.s;
         if( distance_from_city > nearest_city.s + 4 ) {
             //~ First parameter is a pronoun ("He"/"She"), second parameter is a terrain name.
-            kill_place = string_format( _( "%1$s was killed in a %2$s in the wilderness." ),
-                                        pronoun.c_str(), tername.c_str() );
+            kill_place = string_format(_("%1$s was killed in a %2$s in the wilderness."),
+                         pronoun.c_str(), tername.c_str());
 
         } else if( distance_from_city >= nearest_city.s ) {
             //~ First parameter is a pronoun ("He"/"She"), second parameter is a terrain name, third parameter is a city name.
-            kill_place = string_format( _( "%1$s was killed in a %2$s on the outskirts of %3$s." ),
-                                        pronoun.c_str(), tername.c_str(), nearest_city.name.c_str() );
+            kill_place = string_format(_("%1$s was killed in a %2$s on the outskirts of %3$s."),
+                         pronoun.c_str(), tername.c_str(), nearest_city.name.c_str());
         } else {
             //~ First parameter is a pronoun ("He"/"She"), second parameter is a terrain name, third parameter is a city name.
-            kill_place = string_format( _( "%1$s was killed in a %2$s in %3$s." ),
-                                        pronoun.c_str(), tername.c_str(), nearest_city.name.c_str() );
+            kill_place = string_format(_("%1$s was killed in a %2$s in %3$s."),
+                         pronoun.c_str(), tername.c_str(), nearest_city.name.c_str());
         }
     }
 
@@ -2291,14 +2291,13 @@ void player::memorial( std::ostream &memorial_file, std::string epitaph )
         memorial_file << string_format( pgettext( "epitaph", "\"%s\"" ), epitaph.c_str() ) << eol << eol;
     }
     //~ First parameter: Pronoun, second parameter: a profession name (with article)
-    memorial_file << string_format( _( "%1$s was %2$s when the apocalypse began." ),
-                                    pronoun.c_str(), profession_name.c_str() ) << eol;
-    memorial_file << string_format( _( "%1$s died on %2$s of year %3$d, day %4$d, at %5$s." ),
-                                    pronoun.c_str(), season_name_upper( calendar::turn.get_season() ).c_str(),
-                                    ( calendar::turn.years() + 1 ),
-                                    ( calendar::turn.days() + 1 ), calendar::turn.print_time().c_str() ) << eol;
-    memorial_file << kill_place << eol;
-    memorial_file << eol;
+    memorial_file << string_format("%1$s was %2$s when the apocalypse began.",
+                                   pronoun.c_str(), profession_name.c_str()) << "\n";
+    memorial_file << string_format("%1$s died on %2$s of year %d, day %d, at %3$s.",
+                     pronoun.c_str(), season_name_upper(calendar::turn.get_season()).c_str(), (calendar::turn.years() + 1),
+                     (calendar::turn.days() + 1), calendar::turn.print_time().c_str()) << "\n";
+    memorial_file << kill_place << "\n";
+    memorial_file << "\n";
 
     //Misc
     memorial_file << string_format( _( "Cash on hand: $%d" ), cash ) << eol;
@@ -3763,12 +3762,12 @@ void player::on_hit( Creature *source, body_part bp_hit,
         if (!is_player()) {
             if( u_see ) {
                 add_msg(_("%1$s's %2$s puncture %3$s in mid-attack!"), name.c_str(),
-                            (has_trait( trait_QUILLS ) ? _("quills") : _("spines")),
+                            (has_trait("QUILLS") ? _("quills") : _("spines")),
                             source->disp_name().c_str());
             }
         } else {
             add_msg(m_good, _("Your %1$s puncture %2$s in mid-attack!"),
-                            (has_trait( trait_QUILLS ) ? _("quills") : _("spines")),
+                            (has_trait("QUILLS") ? _("quills") : _("spines")),
                             source->disp_name().c_str());
         }
         damage_instance spine_damage;
@@ -3929,16 +3928,16 @@ dealt_damage_instance player::deal_damage( Creature* source, body_part bp,
     }
 
     //Acid blood effects.
-    bool u_see = g->u.sees( *this );
-    int cut_dam = dealt_dams.type_damage( DT_CUT );
-    if( source && has_trait( trait_ACIDBLOOD ) && !one_in( 3 ) &&
-        ( dam >= 4 || cut_dam > 0 ) && ( rl_dist( g->u.pos(), source->pos() ) <= 1) ) {
-        if( is_player() ) {
-            add_msg( m_good, _( "Your acidic blood splashes %s in mid-attack!" ),
-                     source->disp_name().c_str() );
-        } else if( u_see ) {
-            add_msg( _( "%1$s's acidic blood splashes on %2$s in mid-attack!" ),
-                     disp_name().c_str(), source->disp_name().c_str() );
+    bool u_see = g->u.sees(*this);
+    int cut_dam = dealt_dams.type_damage(DT_CUT);
+    if (has_trait("ACIDBLOOD") && !one_in(3) && (dam >= 4 || cut_dam > 0) && (rl_dist(g->u.pos(), source->pos()) <= 1)) {
+        if (is_player()) {
+            add_msg(m_good, _("Your acidic blood splashes %s in mid-attack!"),
+                            source->disp_name().c_str());
+        } else if (u_see) {
+            add_msg(_("%1$s's acidic blood splashes on %2$s in mid-attack!"),
+                        disp_name().c_str(),
+                        source->disp_name().c_str());
         }
         damage_instance acidblood_damage;
         acidblood_damage.add_damage( DT_ACID, rng( 4, 16 ) );
@@ -5027,10 +5026,17 @@ void player::siphon( vehicle &veh, const itype_id &type )
         add_msg( m_bad, _( "There is not enough %s left to siphon it." ), item::nname( type ).c_str() );
         return;
     }
-
-    item liquid( type, calendar::turn, qty );
-    if( g->handle_liquid( liquid, nullptr, 1, nullptr, &veh ) ) {
-        veh.drain( type, qty - liquid.charges );
+    int siphoned = liquid_amount - extra;
+    veh->refill( desired_liquid, extra );
+    if( siphoned > 0 ) {
+        add_msg(ngettext("Siphoned %d unit of %1$s from the %2$s.",
+                            "Siphoned %d units of %1$s from the %2$s.",
+                            siphoned),
+                   siphoned, used_item.tname().c_str(), veh->name.c_str());
+        //Don't consume turns if we decided not to siphon
+        return true;
+    } else {
+        return false;
     }
 }
 
@@ -6044,8 +6050,8 @@ void player::suffer()
                 continue;
             }
 
-            add_msg_if_player( m_warning, _("Your radiation badge changes from %1$s to %2$s!"),
-                               col_before.c_str(), col_after.c_str() );
+            add_msg_if_player(m_warning, _("Your radiation badge changes from %1$s to %2$s!"),
+                col_before.c_str(), col_after.c_str() );
         }
     }
 
@@ -8762,21 +8768,151 @@ void player::use( int inventory_position )
             return;
         }
         invoke_item( used );
+    } else if (used->is_gunmod()) {
+        const auto mod = used->type->gunmod.get();
+        if (!(get_skill_level("gun") >= mod->req_skill)) {
+            add_msg(m_info, _("You need to be at least level %d in the marksmanship skill before you \
+can install this mod."), mod->req_skill);
+            return;
+        }
+        int gunpos = g->inv(_("Select gun to modify:"));
+        item* gun = &(i_at(gunpos));
+        if (gun->is_null()) {
+            add_msg(m_info, _("You do not have that item."));
+            return;
+        } else if (!gun->is_gun()) {
+            add_msg(m_info, _("That %s is not a weapon."), gun->tname().c_str());
+            return;
+        } else if( gun->is_gunmod() ) {
+            add_msg(m_info, _("That %s is a gunmod, it can not be modded."), gun->tname().c_str());
+            return;
+        }
+        islot_gun* guntype = gun->type->gun.get();
+        if (guntype->skill_used == Skill::skill("pistol") && !mod->used_on_pistol) {
+            add_msg(m_info, _("That %s cannot be attached to a handgun."),
+                       used->tname().c_str());
+            return;
+        } else if (guntype->skill_used == Skill::skill("shotgun") && !mod->used_on_shotgun) {
+            add_msg(m_info, _("That %s cannot be attached to a shotgun."),
+                       used->tname().c_str());
+            return;
+        } else if (guntype->skill_used == Skill::skill("smg") && !mod->used_on_smg) {
+            add_msg(m_info, _("That %s cannot be attached to a submachine gun."),
+                       used->tname().c_str());
+            return;
+        } else if (guntype->skill_used == Skill::skill("rifle") && !mod->used_on_rifle) {
+            add_msg(m_info, _("That %s cannot be attached to a rifle."),
+                       used->tname().c_str());
+            return;
+        } else if (guntype->skill_used == Skill::skill("archery") && !mod->used_on_bow && guntype->ammo == "arrow") {
+            add_msg(m_info, _("That %s cannot be attached to a bow."),
+                       used->tname().c_str());
+            return;
+        } else if (guntype->skill_used == Skill::skill("archery") && !mod->used_on_crossbow && guntype->ammo == "bolt") {
+            add_msg(m_info, _("That %s cannot be attached to a crossbow."),
+                       used->tname().c_str());
+            return;
+        } else if (guntype->skill_used == Skill::skill("launcher") && !mod->used_on_launcher) {
+            add_msg(m_info, _("That %s cannot be attached to a launcher."),
+                       used->tname().c_str());
+            return;
+        } else if ( !mod->acceptible_ammo_types.empty() &&
+                    mod->acceptible_ammo_types.count(guntype->ammo) == 0 ) {
+                add_msg(m_info, _("That %1$s cannot be used on a %2$s."), used->tname().c_str(),
+                       ammo_name(guntype->ammo).c_str());
+                return;
+        } else if (guntype->valid_mod_locations.count(mod->location) == 0) {
+            add_msg(m_info, _("Your %s doesn't have a slot for this mod."), gun->tname().c_str());
+            return;
+        } else if (gun->get_free_mod_locations(mod->location) <= 0) {
+            add_msg(m_info, _("Your %1$s doesn't have enough room for another %2$s mod. To remove the mods, \
+activate your weapon."), gun->tname().c_str(), _(mod->location.c_str()));
+            return;
+        }
+        if (used->typeId() == "spare_mag" && gun->has_flag("RELOAD_ONE")) {
+            add_msg(m_info, _("You can not use a spare magazine in your %s."),
+                       gun->tname().c_str());
+            return;
+        }
+        if (mod->location == "magazine" &&
+            gun->clip_size() <= 2) {
+            add_msg(m_info, _("You can not extend the ammo capacity of your %s."),
+                       gun->tname().c_str());
+            return;
+        }
+        if (used->typeId() == "waterproof_gunmod" && gun->has_flag("WATERPROOF_GUN")) {
+            add_msg(m_info, _("Your %s is already waterproof."),
+                       gun->tname().c_str());
+            return;
+        }
+        if (used->typeId() == "tuned_mechanism" && gun->has_flag("NEVER_JAMS")) {
+            add_msg(m_info, _("This %s is eminently reliable. You can't improve upon it this way."),
+                       gun->tname().c_str());
+            return;
+        }
+        if (gun->typeId() == "hand_crossbow" && !mod->used_on_pistol) {
+          add_msg(m_info, _("Your %s isn't big enough to use that mod.'"), gun->tname().c_str(),
+          used->tname().c_str());
+          return;
+        }
+        if (used->typeId() == "brass_catcher" && gun->has_flag("RELOAD_EJECT")) {
+            add_msg(m_info, _("You cannot attach a brass catcher to your %s."),
+                       gun->tname().c_str());
+            return;
+        }
+        for (auto &i : gun->contents) {
+            if (i.type->id == used->type->id) {
+                add_msg(m_info, _("Your %1$s already has a %2$s."), gun->tname().c_str(),
+                           used->tname().c_str());
+                return;
+            } else if ((used->typeId() == "clip" || used->typeId() == "clip2") &&
+                       (i.type->id == "clip" || i.type->id == "clip2")) {
+                add_msg(m_info, _("Your %s already has an extended magazine."),
+                           gun->tname().c_str());
+                return;
+            }
+        }
+        add_msg(_("You attach the %1$s to your %2$s."), used->tname().c_str(),
+                   gun->tname().c_str());
+        gun->contents.push_back(i_rem(used));
+        return;
 
     } else if( used->is_bionic() ) {
         if( install_bionics( *used->type ) ) {
             i_rem( inventory_position );
         }
 
-    } else if( used->is_food() ||
-               used->is_medication() ||
-               used->get_contained().is_food() ||
-               used->get_contained().is_medication() ) {
-        consume( inventory_position );
+        uimenu kmenu;
+        kmenu.selected = 0;
+        kmenu.text = _("Remove which modification?");
+        for (size_t i = 0; i < mods.size(); i++) {
+            if( !mods[i].has_flag("IRREMOVABLE") ){
+                kmenu.addentry( i, true, -1, mods[i].tname() );
+            }
+        }
+        kmenu.addentry( mods.size(), true, 'r', _("Remove all") );
+        kmenu.addentry( mods.size() + 1, true, 'q', _("Cancel") );
+        kmenu.query();
+        choice = kmenu.ret;
 
-    } else if( used->is_book() ) {
-        read( inventory_position );
-
+        if (choice < int(mods.size())) {
+            const std::string mod = used->contents[choice].tname();
+            remove_gunmod(used, unsigned(choice));
+            add_msg(_("You remove your %1$s from your %2$s."), mod.c_str(), used->tname().c_str());
+        } else if (choice == int(mods.size())) {
+            for (int i = used->contents.size() - 1; i >= 0; i--) {
+                if( !used->contents[i].has_flag("IRREMOVABLE") ){
+                    remove_gunmod(used, i);
+                }
+            }
+            add_msg(_("You remove all the modifications from your %s."), used->tname().c_str());
+        } else {
+            add_msg(_("Never mind."));
+            return;
+        }
+        // Removing stuff from a gun takes time.
+        moves -= int(used->reload_time(*this) / 2);
+        return;
     } else if ( used->type->has_use() ) {
         invoke_item( used );
 
@@ -9663,14 +9799,16 @@ const recipe_subset player::get_recipes_from_books( const inventory &crafting_in
         if( !candidate.is_book() ) {
             continue;
         }
-        // NPCs don't need to identify books
-        if( is_player() && !items_identified.count( candidate.typeId() ) ) {
-            continue;
-        }
-
-        for( auto const &elem : candidate.type->book->recipes ) {
-            if( get_skill_level( elem.recipe->skill_used ) >= elem.skill_level ) {
-                res.include( elem.recipe, elem.skill_level );
+        if( r->skill_used == nullptr || get_skill_level( r->skill_used ) >= elem.skill_level ) {
+            if (r->skill_used == NULL ||
+                rng(0, 4) <= (get_skill_level(r->skill_used) - elem.skill_level) / 2) {
+                learn_recipe( r );
+                add_msg(m_good, _("Learned a recipe for %1$s from the %2$s."),
+                                item::nname( r->result ).c_str(), book.nname(1).c_str());
+                return true;
+            } else {
+                add_msg(_("Failed to learn a recipe from the %s."), book.nname(1).c_str());
+                return false;
             }
         }
     }
@@ -10256,17 +10394,41 @@ bool player::armor_absorb( damage_unit& du, item& armor )
     // Don't damage armor as much when bypassed by armor piercing
     // Most armor piercing damage comes from bypassing armor, not forcing through
     const int raw_dmg = du.amount;
-    if( raw_dmg > armors_own_resist ) {
-        // If damage is above armor value, the chance to avoid armor damage is
-        // 50% + 50% * 1/dmg
-        if( one_in( raw_dmg ) || one_in( 2 ) ) {
-            return false;
+    const int raw_armor = res.type_resist( du.type );
+    if( (raw_dmg > raw_armor && !one_in(du.amount) && one_in(2)) ||
+        // or if it isn't, but 1/50 chance
+        (raw_dmg <= raw_armor && !armor.has_flag("STURDY") &&
+         !armor.is_power_armor() && one_in(200)) ) {
+
+        auto &material = armor.get_random_material();
+        std::string damage_verb = ( du.type == DT_BASH ) ?
+            material.bash_dmg_verb() : material.cut_dmg_verb();
+
+        const std::string pre_damage_name = armor.tname();
+        const std::string pre_damage_adj = armor.get_base_material().
+            dmg_adj(armor.damage);
+
+        // add "further" if the damage adjective and verb are the same
+        std::string format_string = ( pre_damage_adj == damage_verb ) ?
+            _("Your %1$s is %2$s further!") : _("Your %1$s is %2$s!");
+        add_msg_if_player( m_bad, format_string.c_str(), pre_damage_name.c_str(),
+                           damage_verb.c_str());
+        //item is damaged
+        if( is_player() ) {
+            SCT.add(posx(), posy(), NORTH, remove_color_tags( pre_damage_name ),
+                    m_neutral, damage_verb, m_info);
         }
-    } else {
-        // Sturdy items and power armors never take chip damage.
-        // Other armors have 0.5% of getting damaged from hits below their armor value.
-        if( armor.has_flag("STURDY") || armor.is_power_armor() || !one_in( 200 ) ) {
-            return false;
+
+        armor.damage++;
+        if( armor.damage >= 5 ) {
+            //~ %s is armor name
+            add_memorial_log( pgettext("memorial_male", "Worn %s was completely destroyed."),
+                              pgettext("memorial_female", "Worn %s was completely destroyed."),
+                              pre_damage_name.c_str() );
+            add_msg_player_or_npc( m_bad, _("Your %s is completely destroyed!"),
+                                   _("<npcname>'s %s is completely destroyed!"),
+                                   pre_damage_name.c_str() );
+            return true;
         }
     }
 
@@ -11602,6 +11764,34 @@ void player::blossoms()
             g->m.add_field( tmp, fd_fungal_haze, rng(1, 2), 0 );
         }
     }
+}
+
+int player::add_ammo_to_worn_quiver( item &ammo )
+{
+    std::vector<item *>quivers;
+    for( auto & worn_item : worn) {
+        if( worn_item.type->can_use( "QUIVER")) {
+            quivers.push_back( &worn_item);
+        }
+    }
+
+    // sort quivers by contents, such that empty quivers go last
+    std::sort( quivers.begin(), quivers.end(), item_ptr_compare_by_charges);
+
+    int quivered_sum = 0;
+    int move_cost_per_arrow = 10;
+    for( std::vector<item *>::iterator it = quivers.begin(); it != quivers.end(); it++) {
+        item *quiver = *it;
+        int stored = quiver->quiver_store_arrow( ammo);
+        if( stored > 0) {
+            add_msg_if_player( ngettext( "You store %d %1$s in your %2$s.", "You store %d %1$s in your %2$s.", stored),
+                               stored, quiver->contents[0].type_name(stored).c_str(), quiver->type_name().c_str());
+        }
+        moves -= std::min( 100, stored * move_cost_per_arrow);
+        quivered_sum += stored;
+    }
+
+    return quivered_sum;
 }
 
 float player::power_rating() const

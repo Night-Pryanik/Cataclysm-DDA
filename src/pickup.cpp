@@ -418,13 +418,60 @@ bool pick_one_up( const tripoint &pickup_target, item &newit, vehicle *veh,
         }
     } else if( !u.can_pickVolume( newit ) ) {
         if( !autopickup ) {
-            const std::string &explain = string_format( _( "Not enough capacity to stash %s" ),
-                                         newit.display_name().c_str() );
-            option = handle_problematic_pickup( newit, offered_swap, explain );
-            did_prompt = true;
-        } else {
-            option = CANCEL;
-        }
+            // Armor can be instantly worn
+            if (newit.is_armor() &&
+                query_yn(_("Put on the %s?"),
+                         newit.display_name().c_str())) {
+                if (g->u.wear_item(&newit)) {
+                    picked_up = true;
+                }
+            } else if (g->u.is_armed()) {
+                if (!g->u.weapon.has_flag("NO_UNWIELD")) {
+                    if( !offered_swap ) {
+                        offered_swap = true;
+                        if ( g->u.weapon.type->id != newit.type->id &&
+                             query_yn(_("No space for %1$s; wield instead? (drops %2$s)"),
+                                      newit.display_name().c_str(),
+                                      g->u.weapon.display_name().c_str()) ) {
+                            picked_up = true;
+                            g->m.add_item_or_charges( pickup_target,
+                                                      g->u.remove_weapon(), 1 );
+                            g->u.inv.assign_empty_invlet( newit, true ); // force getting an invlet.
+                            g->u.wield( &( g->u.i_add(newit) ) );
+
+                            if (newit.invlet) {
+                                add_msg(m_info, _("Wielding %c - %s"), newit.invlet,
+                                        newit.display_name().c_str());
+                            } else {
+                                add_msg(m_info, _("Wielding - %s"), newit.display_name().c_str());
+                            }
+                        }
+                    }
+                } else {
+                    add_msg(m_info, _("There's no room in your inventory for the %s "
+                                      "and you can't unwield your %s."),
+                            newit.display_name().c_str(),
+                            g->u.weapon.display_name().c_str());
+                }
+            } else if( !g->u.is_armed()  ) {
+                if (g->u.keep_hands_free) {
+                    add_msg(m_info, _("There's no room in your inventory for the %s "
+                                      "and you have decided to keep your hands free."),
+                            newit.display_name().c_str());
+                } else {
+                    g->u.inv.assign_empty_invlet(newit, true);  // force getting an invlet.
+                    g->u.wield(&(g->u.i_add(newit)));
+                    picked_up = true;
+
+                    if (newit.invlet) {
+                        add_msg(m_info, _("Wielding %c - %s"), newit.invlet,
+                                newit.display_name().c_str());
+                    } else {
+                        add_msg(m_info, _("Wielding - %s"), newit.display_name().c_str());
+                    }
+                }
+            } // end of if unarmed
+        } // end of if !autopickup
     } else {
         option = STASH;
     }

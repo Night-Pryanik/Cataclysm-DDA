@@ -53,6 +53,11 @@ void mdefense::zapback( monster &m, Creature *const source,
     source->deal_damage( &m, bp_arm_l, shock );
     source->deal_damage( &m, bp_arm_r, shock );
 
+    if( g->u.sees( source->pos() ) ) {
+        auto const msg_type = ( source == &g->u ) ? m_bad : m_info;
+        add_msg( msg_type, _( "Striking the %1$s shocks %2$s!" ),
+                 m->name().c_str(), source->disp_name().c_str() );
+    }
     source->check_dead_state();
 }
 

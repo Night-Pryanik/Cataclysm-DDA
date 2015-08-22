@@ -235,8 +235,36 @@ int player::fire_gun( const tripoint &target, int shots, item& gun )
             break;
         }
 
-        if( !gun.has_flag( "VEHICLE" ) ) {
-            use_charges( "UPS", gun.get_gun_ups_drain() );
+    // This is expensive, let's cache. todo: figure out if we need weapon.range(&p);
+    const int weaponrange = used_weapon->gun_range( this );
+
+    // If the dispersion from the weapon is greater than the dispersion from your skill,
+    // you can't tell if you need to correct or the gun messed you up, so you can't learn.
+    const int weapon_dispersion = used_weapon->get_curammo()->ammo->dispersion +
+        used_weapon->gun_dispersion(false);
+    const int player_dispersion = skill_dispersion( used_weapon, false ) +
+        ranged_skill_offset( used_weapon->gun_skill() );
+    // High perception allows you to pick out details better, low perception interferes.
+    const bool train_skill = weapon_dispersion < player_dispersion + 15 * rng(0, get_per());
+    if( train_skill ) {
+        practice( skill_used, 8 + 2 * num_shots );
+    } else if( one_in(30) ) {
+        add_msg_if_player(m_info, _("You'll need a more accurate gun to keep improving your aim."));
+    }
+
+    // chance to disarm an NPC with a whip if skill is high enough
+    if(proj.proj_effects.count("WHIP") && (this->skillLevel("melee") > 5) && one_in(3)) {
+        int npcdex = g->npc_at(targ_arg);
+        if(npcdex != -1) {
+            npc *p = g->active_npc[npcdex];
+            if(!p->weapon.is_null()) {
+                item weap = p->remove_weapon();
+                add_msg_if_player(m_good, _("You disarm %1$s's %2$s using your whip!"), p->name.c_str(),
+                                  weap.tname().c_str());
+                // Can probably send a weapon through a wall
+                tripoint random_point( targ_arg.x + rng(-1, 1), targ_arg.y + rng(-1, 1), targ_arg.z );
+                g->m.add_item_or_charges(random_point, weap);
+            }
         }
 
 
@@ -532,19 +560,25 @@ static int draw_targeting_window( WINDOW *w_target, const std::string &name, pla
     // Draw the "title" of the window.
     mvwprintz(w_target, 0, 2, c_white, "< ");
     std::string title;
-
-    switch( mode ) {
-        case TARGET_MODE_FIRE:
-        case TARGET_MODE_TURRET_MANUAL:
-            title = string_format( _( "Firing %s %s" ), name.c_str(), print_recoil( p ).c_str() );
-            break;
-
-        case TARGET_MODE_THROW:
-            title = string_format( _( "Throwing %s" ), name.c_str() );
-            break;
-
-        default:
-            title = _( "Set target" );
+    if (!relevant) { // currently targetting vehicle to refill with fuel
+        title = _("Select a vehicle");
+    } else {
+        if( mode == TARGET_MODE_FIRE ) {
+            if(relevant->has_flag("RELOAD_AND_SHOOT")) {
+                title = string_format( _("Shooting %1$s from %2$s"),
+                        p.weapon.get_curammo()->nname(1).c_str(), p.weapon.tname().c_str());
+            } else if( relevant->has_flag("NO_AMMO") ) {
+                title = string_format( _("Firing %s"), p.weapon.tname().c_str());
+            } else {
+                title = string_format( _("Firing %s"), p.print_gun_mode().c_str() );
+            }
+            title += " ";
+            title += p.print_recoil();
+        } else if( mode == TARGET_MODE_THROW ) {
+            title = string_format( _("Throwing %s"), relevant->tname().c_str());
+        } else {
+            title = string_format( _("Setting target for %s"), relevant->tname().c_str());
+        }
     }
 
     trim_and_print( w_target, 0, 4, getmaxx(w_target) - 7, c_red, "%s", title.c_str() );
@@ -1604,11 +1638,52 @@ double player::gun_value( const item &weap, long ammo ) const
         { 50.0f, 3.0f },
     }};
 
-    // How much until reload
-    float capacity = gun.clip > 0 ? std::min<float>( gun.clip, ammo ) : ammo;
-    // How much until dry and a new weapon is needed
-    capacity += std::min<float>( 1.0, ammo / 20 );
-    float capacity_factor = multi_lerp( capacity_thresholds, capacity );
+        for( const item &i : drop_item.contents ) {
+            g->m.add_item_or_charges( pt, i );
+        }
+        // TODO: Non-glass breaking
+        // TODO: Wine glass breaking vs. entire sheet of glass breaking
+        sounds::sound(pt, 16, _("glass breaking!"));
+        return;
+    }
+
+    // Copy the item
+    item dropped_item = drop_item;
+
+    monster *mon = dynamic_cast<monster *>( attack.hit_critter );
+
+    // We can only embed in monsters
+    bool embed = mon != nullptr && !mon->is_dead_state();
+    // And if we actually want to embed
+    embed = embed && effects.count( "NO_EMBED" ) == 0;
+    // Don't embed in small creatures
+    if( embed ) {
+        const m_size critter_size = mon->get_size();
+        const int vol = dropped_item.volume( true, false );
+        embed = embed && ( critter_size > MS_TINY || vol < 1 );
+        embed = embed && ( critter_size > MS_SMALL || vol < 2 );
+        // And if we deal enough damage
+        // Item volume bumps up the required damage too
+        embed = embed &&
+                 ( attack.dealt_dam.type_damage( DT_CUT ) / 2 ) +
+                   attack.dealt_dam.type_damage( DT_STAB ) >
+                     attack.dealt_dam.type_damage( DT_BASH ) +
+                     vol * 3 + rng( 0, 5 );
+    }
+
+    if( embed ) {
+        mon->add_item( dropped_item );
+        if( g->u.sees( *mon ) ) {
+            add_msg( _("The %1$s embeds in %2$s!"),
+                     dropped_item.tname().c_str(),
+                     mon->disp_name().c_str() );
+        }
+    } else {
+        bool do_drop = true;
+        if( effects.count( "ACT_ON_RANGED_HIT" ) ) {
+            // Don't drop if it exploded
+            do_drop = !dropped_item.process( nullptr, attack.end_point, true );
+        }
 
     double gun_value = damage_and_accuracy * capacity_factor;
 

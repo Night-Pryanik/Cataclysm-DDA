@@ -390,7 +390,17 @@ void npc::execute_action( npc_action action )
         break;
 
     case npc_reload: {
-        do_reload( weapon );
+        moves -= weapon.reload_time(*this);
+        int ammo_index = weapon.pick_reload_ammo(*this, false);
+        if (!weapon.reload(*this, ammo_index)) {
+            debugmsg("NPC reload failed.");
+        }
+        recoil = MIN_RECOIL;
+        if (g->u.sees( *this )) {
+            add_msg(_("%1$s reloads their %2$s."), name.c_str(),
+                    weapon.tname().c_str());
+            sfx::play_variant_sound( "reload", weapon.typeId(), sfx::get_heard_volume(pos3()), sfx::get_heard_angle( pos3()));
+        }
     }
     break;
 
@@ -1567,6 +1577,49 @@ void npc::move_to( const tripoint &pt, bool no_bashing )
         if( in_vehicle ) {
             g->m.unboard_vehicle( old_pos );
         }
+        if( g->m.move_cost( p ) > 0 ) {
+            bool diag = trigdist && posx() != p.x && posy() != p.y;
+            moves -= run_cost( g->m.combined_movecost( pos3(), p ), diag );
+            setpos( p );
+            int part;
+            vehicle *veh = g->m.veh_at( pos3(), part );
+            if( veh != nullptr && veh->part_with_feature( part, VPFLAG_BOARDABLE ) >= 0 ) {
+                g->m.board_vehicle( pos3(), this );
+            }
+            g->m.creature_on_trap( *this );
+            g->m.creature_in_field( *this );
+        } else if( g->m.open_door( p, !g->m.is_outside( pos3() ) ) ) {
+            moves -= 100;
+        } else {
+            bool ter_or_furn = g->m.has_flag_ter_or_furn( "CLIMBABLE", p );
+            if (ter_or_furn) {
+                bool u_see_me = g->u.sees( *this );
+                int climb = dex_cur;
+                if (one_in( climb )) {
+                    if( u_see_me ) {
+                        add_msg( m_neutral, _( "%1$s falls tries to climb the %2$s but slips." ), name.c_str(),
+                                 ter_or_furn ? g->m.tername(p).c_str() : g->m.furnname(p).c_str());
+                    }
+                    moves -= 400;
+                } else {
+                    if( u_see_me ) {
+                        add_msg( m_neutral, _( "%1$s climbs over the %2$s." ), name.c_str(),
+                             ter_or_furn ? g->m.tername(p).c_str() : g->m.furnname(p).c_str());
+                    }
+                    moves -= (500 - (rng(0,climb) * 20));
+                    setx( p.x);
+                    sety( p.y);
+                }
+            } else if (g->m.is_bashable(p) && g->m.bash_rating(str_cur + weapon.type->melee_dam, p) > 0) {
+                moves -= int(weapon.is_null() ? 80 : weapon.attack_time() * 0.8);;
+                int smashskill = str_cur + weapon.type->melee_dam;
+                g->m.bash( p, smashskill );
+            } else {
+                if( attitude == NPCATT_MUG ||
+                    attitude == NPCATT_KILL ||
+                    attitude == NPCATT_WAIT_FOR_LEAVE ) {
+                    attitude = NPCATT_FLEE;
+                }
 
         // Close doors behind self (if you can)
         if( is_friend() && rules.close_doors ) {
@@ -1923,19 +1976,39 @@ void npc::pick_up_item()
         }
     }
     // Describe the pickup to the player
-    bool u_see = g->u.sees( *this ) || g->u.sees( wanted_item_pos );
-    if( u_see ) {
-        if( picked_up.size() == 1 ) {
-            add_msg(_("%1$s picks up a %2$s."), name.c_str(),
-                    picked_up.front().tname().c_str());
-        } else if( picked_up.size() == 2 ) {
-            add_msg( _("%1$s picks up a %2$s and a %3$s."), name.c_str(),
-                     picked_up.front().tname().c_str(),
-                     picked_up.back().tname().c_str() );
-        } else if( picked_up.size() > 2 ) {
-            add_msg( _("%s picks up several items."), name.c_str() );
+    bool u_see_me = g->u.sees( *this );
+    bool u_see_items = g->u.sees( wanted_item_pos );
+    if( u_see_me ) {
+        if( pickup.size() == 1 ) {
+            if (u_see_items) {
+                add_msg(_("%1$s picks up a %2$s."), name.c_str(),
+                        items[pickup[0]].tname().c_str());
+            } else {
+                add_msg(_("%s picks something up."), name.c_str());
+            }
+        } else if( pickup.size() == 2 ) {
+            if (u_see_items) {
+                add_msg(_("%1$s picks up a %2$s and a %3$s."), name.c_str(),
+                        items[pickup[0]].tname().c_str(),
+                        items[pickup[1]].tname().c_str());
+            } else {
+                add_msg(_("%s picks up a couple of items."), name.c_str());
+            }
+        } else if( pickup.size() > 2 ) {
+            add_msg(_("%s picks up several items."), name.c_str());
         } else {
-            add_msg( _("%s looks around nervously, as if searching for something."), name.c_str() );
+            add_msg(_("%s looks around nervously, as if searching for something."), name.c_str());
+        }
+    } else if (u_see_items) {
+        if( pickup.size() == 1 ) {
+            add_msg(_("Someone picks up a %s."),
+                    items[pickup[0]].tname().c_str());
+        } else if( pickup.size() == 2 ) {
+            add_msg(_("Someone picks up a %1$s and a %2$s"),
+                    items[pickup[0]].tname().c_str(),
+                    items[pickup[1]].tname().c_str());
+        } else if( pickup.size() > 2 ) {
+            add_msg(_("Someone picks up several items."));
         }
     }
 
@@ -2377,16 +2450,74 @@ bool npc::alt_attack()
         check_alt_item( sl->front() );
     }
 
-    if( used == nullptr ) {
-        return false;
-    }
+    // Are we going to throw this item?
+    if (!thrown_item(used)) {
+        activate_item(weapon_index);
+    } else { // We are throwing it!
+        if (dist <= confident_range(weapon_index) && wont_hit_friend( tar, weapon_index )) {
+            if (g->u.sees( *this )) {
+                add_msg(_("%1$s throws a %2$s."),
+                        name.c_str(), used->tname().c_str());
+            }
 
-    int weapon_index = get_item_position( used );
-    if( weapon_index == INT_MIN ) {
-        debugmsg( "npc::alt_attack() couldn't find expected item %s",
-                  used->tname().c_str() );
-        return false;
-    }
+            int stack_size = -1;
+            if( used->count_by_charges() ) {
+                stack_size = used->charges;
+                used->charges = 1;
+            }
+            throw_item( tar, *used );
+            // Throw a single charge of a stacking object.
+            if( stack_size == -1 || stack_size == 1 ) {
+                i_rem(weapon_index);
+            } else {
+                used->charges = stack_size - 1;
+            }
+        } else if (!wont_hit_friend( tar, weapon_index )) {// Danger of friendly fire
+
+            if (!used->active || used->charges > 2) { // Safe to hold on to, for now
+                avoid_friendly_fire(target);    // Maneuver around player
+            } else { // We need to throw this live (grenade, etc) NOW! Pick another target?
+                int conf = confident_range(weapon_index);
+                for (int dist = 2; dist <= conf; dist++) {
+                    for (int x = posx() - dist; x <= posx() + dist; x++) {
+                        for (int y = posy() - dist; y <= posy() + dist; y++) {
+                            int newtarget = g->mon_at( { x, y, posz() } );
+                            int newdist = rl_dist(posx(), posy(), x, y);
+                            // TODO: Change "newdist >= 2" to "newdist >= safe_distance(used)"
+                            // Molotovs are safe at 2 tiles, grenades at 4, mininukes at 8ish
+                            if (newdist <= conf && newdist >= 2 && newtarget != -1 &&
+                                wont_hit_friend( tripoint( x, y, posz() ), weapon_index)) { // Friendlyfire-safe!
+                                alt_attack(newtarget);
+                                return;
+                            }
+                        }
+                    }
+                }
+                /* If we have reached THIS point, there's no acceptible monster to throw our
+                 * grenade or whatever at.  Since it's about to go off in our hands, better to
+                 * just chuck it as far away as possible--while being friendly-safe.
+                 */
+                int best_dist = 0;
+                for (int dist = 2; dist <= conf; dist++) {
+                    for (int x = posx() - dist; x <= posx() + dist; x++) {
+                        for (int y = posy() - dist; y <= posy() + dist; y++) {
+                            int new_dist = rl_dist(posx(), posy(), x, y);
+                            if (new_dist > best_dist && wont_hit_friend( tripoint( x, y, posz() ), weapon_index)) {
+                                best_dist = new_dist;
+                                tar.x = x;
+                                tar.y = y;
+                            }
+                        }
+                    }
+                }
+                /* Even if tar.x/tar.y didn't get set by the above loop, throw it anyway.  They
+                 * should be equal to the original location of our target, and risking friendly
+                 * fire is better than holding on to a live grenade / whatever.
+                 */
+                if (g->u.sees( *this )) {
+                    add_msg(_("%1$s throws a %2$s."), name.c_str(),
+                            used->tname().c_str());
+                }
 
     // Are we going to throw this item?
     if( !used->active && used->has_flag( "NPC_ACTIVATE" ) ) {
@@ -2486,11 +2617,24 @@ void npc::heal_player( player &patient )
         return;
     }
 
-    // Close enough to heal!
-    bool u_see = g->u.sees( *this ) || g->u.sees( patient );
-    if( u_see ) {
-        add_msg( _("%1$s heals %2$s."), name.c_str(), patient.name.c_str() );
-    }
+        bool u_see_me      = g->u.sees( *this ),
+             u_see_patient = g->u.sees( patient );
+        if (patient.is_npc()) {
+            if (u_see_me) {
+                if (u_see_patient) {
+                    add_msg(_("%1$s heals %2$s."),
+                            name.c_str(), patient.name.c_str());
+                } else {
+                    add_msg(_("%s heals someone."), name.c_str());
+                }
+            } else if (u_see_patient) {
+                add_msg(_("Someone heals %s."), patient.name.c_str());
+            }
+        } else if (u_see_me) {
+            add_msg(m_good, _("%s heals you."), name.c_str());
+        } else {
+            add_msg(m_good, _("Someone heals you."));
+        }
 
     item &used = get_healing_item();
     if( used.is_null() ) {
@@ -2525,10 +2669,9 @@ void npc::heal_self()
     if( g->u.sees( *this ) ) {
         add_msg( _("%s applies a %s"), name.c_str(), used.tname().c_str() );
     }
-
-    long charges_used = used.type->invoke( this, &used, pos(), "heal" );
-    if( used.is_medication() ) {
-        consume_charges( used, charges_used );
+    if (g->u.sees( *this )) {
+        add_msg(_("%1$s heals %2$s."), name.c_str(),
+                (male ? _("himself") : _("herself")));
     }
 }
 
@@ -2685,19 +2828,92 @@ void npc::mug_player(player &mark)
     if( rl_dist( pos(), mark.pos() ) > 1 ) { // We have to travel
         update_path( mark.pos() );
         move_to_next();
-        return;
-    }
-
-    const bool u_see = g->u.sees( *this ) || g->u.sees( mark );
-    if (mark.cash > 0) {
-        cash += mark.cash;
-        mark.cash = 0;
-        moves = 0;
-        // Describe the action
-        if( mark.is_npc() ) {
-            if( u_see ) {
-                add_msg(_("%1$s takes %2$s's money!"),
-                        name.c_str(), mark.name.c_str());
+    } else {
+        bool u_see_me   = g->u.sees( *this ),
+             u_see_mark = g->u.sees( mark );
+        if (mark.cash > 0) {
+            cash += mark.cash;
+            mark.cash = 0;
+            moves = 0;
+            // Describe the action
+            if (mark.is_npc()) {
+                if (u_see_me) {
+                    if (u_see_mark) {
+                        add_msg(_("%1$s takes %2$s's money!"),
+                                name.c_str(), mark.name.c_str());
+                    } else {
+                        add_msg(_("%s takes someone's money!"),
+                                name.c_str());
+                    }
+                } else if (u_see_mark) {
+                    add_msg(_("Someone takes %s's money!"),
+                            mark.name.c_str());
+                }
+            } else {
+                if (u_see_me) {
+                    add_msg(m_bad, _("%s takes your money!"), name.c_str());
+                } else {
+                    add_msg(m_bad, _("Someone takes your money!"));
+                }
+            }
+        } else { // We already have their money; take some goodies!
+            // value_mod affects at what point we "take the money and run"
+            // A lower value means we'll take more stuff
+            double value_mod = 1 - double((10 - personality.bravery)    * .05) -
+                               double((10 - personality.aggression) * .04) -
+                               double((10 - personality.collector)  * .06);
+            if (!mark.is_npc()) {
+                value_mod += double(op_of_u.fear * .08);
+                value_mod -= double((8 - op_of_u.value) * .07);
+            }
+            int best_value = minimum_item_value() * value_mod;
+            int item_index = INT_MIN;
+            invslice slice = mark.inv.slice();
+            for (size_t i = 0; i < slice.size(); i++) {
+                if( value(slice[i]->front()) >= best_value &&
+                    can_pickVolume( slice[i]->front().volume(), true ) &&
+                    can_pickWeight( slice[i]->front().weight(), true ) ) {
+                    best_value = value(slice[i]->front());
+                    item_index = i;
+                }
+            }
+            if (item_index == INT_MIN) { // Didn't find anything worthwhile!
+                attitude = NPCATT_FLEE;
+                if (!one_in(3)) {
+                    say("<done_mugging>");
+                }
+                moves -= 100;
+            } else {
+                bool u_see_me   = g->u.sees( *this ),
+                     u_see_mark = g->u.sees( mark );
+                item stolen = mark.i_rem(item_index);
+                if (mark.is_npc()) {
+                    if (u_see_me) {
+                        if (u_see_mark)
+                            add_msg(_("%1$s takes %2$s's %3$s."), name.c_str(),
+                                    mark.name.c_str(),
+                                    stolen.tname().c_str());
+                        else {
+                            add_msg(_("%s takes something from somebody."),
+                                    name.c_str());
+                        }
+                    } else if (u_see_mark)
+                        add_msg(_("Someone takes %1$s's %2$s."),
+                                mark.name.c_str(), stolen.tname().c_str());
+                } else {
+                    if (u_see_me) {
+                        add_msg(m_bad, _("%1$s takes your %2$s."),
+                                name.c_str(), stolen.tname().c_str());
+                    } else {
+                        add_msg(m_bad, _("Someone takes your %s."),
+                                stolen.tname().c_str());
+                    }
+                }
+                i_add(stolen);
+                moves -= 100;
+                if (!mark.is_npc()) {
+                    op_of_u.value -= rng(0, 1);    // Decrease the value of the player
+                }
             }
         } else {
             add_msg(m_bad, _("%s takes your money!"), name.c_str());

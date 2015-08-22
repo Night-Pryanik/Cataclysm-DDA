@@ -654,11 +654,9 @@ void Creature::deal_projectile_attack( Creature *source, dealt_projectile_attack
                 add_msg( source->is_player() ? _("You miss!") : _("The shot misses!") );
             }
         } else if( dealt_dam.total_damage() == 0 ) {
-            //~ 1$ - monster name, 2$ - character's bodypart or monster's skin/armor
-            add_msg( _("The shot reflects off %1$s %2$s!"), disp_name(true).c_str(),
-                     is_monster() ?
-                        skin_name().c_str() :
-                        body_part_name_accusative(bp_hit).c_str() );
+	//~ 1$ - monster name, 2$ - monster's bodypart
+            add_msg(_("The shot reflects off %1$s %2$s!"), disp_name(true).c_str(),
+                    skin_name().c_str());
         } else if( is_player() ) {
                 //monster hits player ranged
                 //~ Hit message. 1$s is bodypart name in accusative. 2$d is damage value.
@@ -686,7 +684,7 @@ void Creature::deal_projectile_attack( Creature *source, dealt_projectile_attack
                 add_msg(m_good, _("You hit %s for %d damage."),
                         disp_name().c_str(), dealt_dam.total_damage());
             } else if( u_see_this ) {
-                //~ 1$ - shooter, 2$ - target
+		//~ 1$ - shooter, 2$ - target
                 add_msg(_("%1$s shoots %2$s."),
                         source->disp_name().c_str(), disp_name().c_str());
             }

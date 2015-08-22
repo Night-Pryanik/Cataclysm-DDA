@@ -2241,7 +2241,71 @@ void act_vehicle_siphon(vehicle* veh) {
         fuel = fuels.front();
     }
 
-    g->u.siphon( *veh, fuel );
+    const auto foundv = find_vehicles_around(g->u.pos(),
+            [&](vehicle* it) { return it != veh && (it->fuel_capacity(fuel) - it->fuel_left(fuel)) > 0; });
+
+    add_msg(m_debug, "Found %d vehicles carrying %s", foundv.size(), fuel.c_str());
+
+    // No other vehicles around, just siphon into a can.
+    if(foundv.empty()) {
+        g->u.siphon(veh, fuel);
+        return;
+    } else {
+        uimenu fmenu;
+        fmenu.text = _("Fill what?");
+        fmenu.addentry(_("Nearby vehicle (%d)"), foundv.size());
+        fmenu.addentry(_("Container"));
+        fmenu.addentry(_("Never mind"));
+        fmenu.query();
+        auto choice = fmenu.ret;
+
+        // HAX: if choice is 0 ("Nearby vehicle"), we'll fall through to later code.
+        if(choice == 1) {
+            g->u.siphon(veh, fuel);
+            return;
+        } else if(choice == 2) {
+            add_msg(m_info, _("Never mind."));
+            return;
+        }
+    }
+
+    add_msg(m_debug, "Found %d vehicles carrying %s", foundv.size(), fuel.c_str());
+
+    // If we get here, we're doing vehicle-to-vehicle siphoning for sure.
+    vehicle* fillv = nullptr;
+    if(foundv.size() == 1) {
+        fillv = foundv.front();
+    } else {
+        tripoint posp;
+        g->draw_ter();
+        if(choose_adjacent( _("Fill which vehicle?"), posp ) ) {
+            fillv = g->m.veh_at( posp );
+        } else {
+            add_msg(m_info, _("Never mind."));
+            return; // Bailed out of vehicle selection.
+        }
+    }
+
+    if(fillv == nullptr) { // Ain't nothing there! Go away.
+        add_msg(m_info, _("There's no vehicle there."));
+        return;
+    } else if(fillv == veh) {
+        add_msg(m_info, _("As you bend the hose into a U-shape, you figure out something's not quite right..."));
+        return;
+    }
+
+    auto want = fillv->fuel_capacity(fuel) - fillv->fuel_left(fuel);
+    auto got = veh->drain(fuel, want);
+    fillv->refill(fuel, got);
+    g->u.moves -= 200;
+
+    if(got < want) {
+        add_msg(m_info, _("Siphoned %d units of %1$s from the %2$s into the %3$s, draining the tank."),
+                got, item::nname( fuel ).c_str(), veh->name.c_str(), fillv->name.c_str() );
+    } else {
+        add_msg(m_info, _("Siphoned %d units of %1$s from the %2$s into the %3$s, receiving tank is full."),
+                got, item::nname( fuel ).c_str(), veh->name.c_str(), fillv->name.c_str() );
+    }
 }
 
 /**
@@ -2346,17 +2410,40 @@ void veh_interact::complete_vehicle()
             veh->parts[partnum].direction = dir;
         }
 
-        add_msg( m_good, _("You install a %1$s into the %2$s." ), veh->parts[ partnum ].name().c_str(), veh->name.c_str() );
-
-        for( const auto &sk : vpinfo.install_skills ) {
-            g->u.practice( sk.first, veh_utils::calc_xp_gain( vpinfo, sk.first ) );
+        add_msg (m_good, _("You install a %1$s into the %2$s."),
+                 vpinfo.name.c_str(), veh->name.c_str());
+        // easy parts don't train
+        if (!is_wrenchable && !is_hand_remove) {
+            g->u.practice( "mechanics", vpinfo.difficulty * 5 + (is_wood ? 10 : 20) );
         }
 
         break;
-    }
-
-    case 'r': {
-        veh_utils::repair_part( *veh, veh->parts[ vehicle_part ], g->u );
+    case 'r':
+        veh->last_repair_turn = calendar::turn;
+        if (veh->parts[vehicle_part].hp <= 0) {
+            veh->break_part_into_pieces(vehicle_part, g->u.posx(), g->u.posy());
+            used_item = consume_vpart_item (veh->parts[vehicle_part].get_id());
+            veh->parts[vehicle_part].properties_from_item( used_item );
+            dd = 0;
+            veh->insides_dirty = true;
+        } else {
+            dmg = 1.1 - double(veh->parts[vehicle_part].hp) / veh->part_info(vehicle_part).durability;
+        }
+        if (has_goggles) {
+            // Need welding goggles to use any of these tools,
+            // without the goggles one _must_ use the duct tape
+            tools.push_back(tool_comp("welder", int(welder_charges * dmg)));
+            tools.push_back(tool_comp("oxy_torch", int(welder_oxy_charges * dmg)));
+            tools.push_back(tool_comp("welder_crude", int(welder_crude_charges * dmg)));
+            tools.push_back(tool_comp("toolset", int(welder_crude_charges * dmg)));
+        }
+        tools.push_back(tool_comp("duct_tape", int(DUCT_TAPE_USED * dmg)));
+        tools.push_back(tool_comp("toolbox", int(DUCT_TAPE_USED * dmg)));
+        g->u.consume_tools(tools, 1, repair_hotkeys);
+        veh->parts[vehicle_part].hp = veh->part_info(vehicle_part).durability;
+        add_msg (m_good, _("You repair the %1$s's %2$s."),
+                 veh->name.c_str(), veh->part_info(vehicle_part).name.c_str());
+        g->u.practice( "mechanics", int(((veh->part_info(vehicle_part).difficulty + dd) * 5 + 20)*dmg) );
         break;
     }
 
@@ -2453,11 +2540,13 @@ void veh_interact::complete_vehicle()
             g->m.destroy_vehicle (veh);
         } else {
             if (broken) {
-                add_msg( _( "You remove the broken %1$s from the %2$s." ),
-                         veh->parts[ vehicle_part ].name().c_str(), veh->name.c_str() );
+                add_msg(_("You remove the broken %1$s from the %2$s."),
+                        veh->part_info(vehicle_part).name.c_str(),
+                        veh->name.c_str());
             } else {
-                add_msg( _( "You remove the %1$s from the %2$s." ),
-                         veh->parts[ vehicle_part ].name().c_str(), veh->name.c_str() );
+                add_msg(_("You remove the %1$s from the %2$s."),
+                        veh->part_info(vehicle_part).name.c_str(),
+                        veh->name.c_str());
             }
             veh->remove_part (vehicle_part);
             veh->part_removal_cleanup();
@@ -2478,7 +2567,10 @@ void veh_interact::complete_vehicle()
             removed_wheel = veh->parts[replaced_wheel].properties_to_item();
             veh->remove_part( replaced_wheel );
             veh->part_removal_cleanup();
-            int partnum = veh->install_part( dx, dy, part_id, consume_vpart_item( part_id ) );
+            add_msg( _("You replace one of the %1$s's tires with a %2$s."),
+                     veh->name.c_str(), vpinfo.name.c_str() );
+            used_item = consume_vpart_item( part_id );
+            partnum = veh->install_part( dx, dy, part_id, used_item );
             if( partnum < 0 ) {
                 debugmsg ("complete_vehicle tire change fails dx=%d dy=%d id=%d", dx, dy, part_id.c_str());
             }

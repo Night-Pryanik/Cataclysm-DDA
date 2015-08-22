@@ -4663,10 +4663,18 @@ void item::reload_option::qty( long val )
         return;
     }
 
-    long limit = target->ammo_capacity() - target->ammo_remaining();
-
-    if( target->ammo_type() == ammotype( "plutonium" ) ) {
-        limit = limit / PLUTONIUM_CHARGES + ( limit % PLUTONIUM_CHARGES != 0 );
+    bool const is_from_quiver = pos < -1 && ammo_container != nullptr && ammo_container->type->can_use( "QUIVER" );
+    if( is_from_quiver ) {
+        // chance to fail pulling an arrow at lower levels
+        int archery = u.skillLevel( "archery" );
+        if( archery <= 2 && one_in( 10 ) ) {
+            u.moves -= 30;
+            u.add_msg_if_player( _( "You try to pull a %1$s from your %2$s, but fail!" ),
+                                ammo_to_use->tname().c_str(), ammo_container->type_name().c_str() );
+            return false;
+        }
+        u.add_msg_if_player( _( "You pull a %1$s from your %2$s and nock it." ),
+                             ammo_to_use->tname().c_str(), ammo_container->type_name().c_str() );
     }
 
     // constrain by available ammo, target capacity and other external factors (max_qty)
@@ -4731,25 +4739,42 @@ bool item::reload( player &u, item_location loc, long qty )
         return false;
     }
 
-    // limit quantity of ammo loaded to remaining capacity
-    long limit = ammo_capacity() - ammo_remaining();
-
-    if( ammo_type() == ammotype( "plutonium" ) ) {
-        limit = limit / PLUTONIUM_CHARGES + ( limit % PLUTONIUM_CHARGES != 0 );
-    }
-
-    qty = std::min( qty, limit );
-
-    casings_handle( [&u]( item &e ) {
-        return u.i_add_or_drop( e );
-    } );
-
-    if( is_magazine() ) {
-        qty = std::min( qty, ammo->charges );
-
-        if( is_ammo_belt() && type->magazine->linkage != "NULL" ) {
-            if( !u.use_charges_if_avail( type->magazine->linkage, qty ) ) {
-                debugmsg( "insufficient linkages available when reloading ammo belt" );
+    if (pos != INT_MIN) {
+        // If the gun is currently loaded with a different type of ammo, reloading fails
+        if ((reload_target->is_gun() || reload_target->is_gunmod()) &&
+            reload_target->charges > 0 && reload_target->get_curammo_id() != ammo_to_use->typeId()) {
+            return false;
+        }
+        if (reload_target->is_gun() || reload_target->is_gunmod()) {
+            if (!ammo_to_use->is_ammo()) {
+                debugmsg("Tried to reload %1$s with %2$s!", tname().c_str(),
+                         ammo_to_use->tname().c_str());
+                return false;
+            }
+            reload_target->set_curammo( *ammo_to_use );
+        }
+        if( has_curammo() ) {
+            eject_casings( u, reload_target, get_curammo()->ammo->casing );
+        }
+        if (single_load || max_load == 1) { // Only insert one cartridge!
+            reload_target->charges++;
+            ammo_to_use->charges--;
+        } else if( reload_target->ammo_type() == "plutonium" ) {
+            int charges_per_plut = 500;
+            long max_plut = floor( static_cast<float>((max_load - reload_target->charges) /
+                                                      charges_per_plut) );
+            int charges_used = std::min(ammo_to_use->charges, max_plut);
+            reload_target->charges += (charges_used * charges_per_plut);
+            ammo_to_use->charges -= charges_used;
+        } else {
+            // if this is the spare magazine use appropriate size, otherwise max_load
+            max_load = (reloading_spare_mag) ? spare_mag_size() : max_load;
+            reload_target->charges += ammo_to_use->charges;
+            ammo_to_use->charges = 0;
+            if (reload_target->charges > max_load) {
+                // More rounds than the clip holds, put some back
+                ammo_to_use->charges += reload_target->charges - max_load;
+                reload_target->charges = max_load;
             }
         }
 
@@ -5069,9 +5094,28 @@ bool item::use_amount(const itype_id &it, long &quantity, std::list<item> &used)
 
 bool item::allow_crafting_component() const
 {
-    // vehicle batteries are implemented as magazines of charge
-    if( is_magazine() && ammo_type() == ammotype( "battery" ) ) {
-        return true;
+    LIQUID_FILL_ERROR lferr = has_valid_capacity_for_liquid( liquid );
+    switch ( lferr ) {
+        case L_ERR_NONE :
+            break;
+        case L_ERR_NO_MIX:
+            err = string_format( _( "You can't mix loads in your %s." ), tname().c_str() );
+            return false;
+        case L_ERR_NOT_CONTAINER:
+            err = string_format( _( "That %1$s won't hold %2$s." ), tname().c_str(), liquid.tname().c_str());
+            return false;
+        case L_ERR_NOT_WATERTIGHT:
+            err = string_format( _( "That %s isn't water-tight." ), tname().c_str());
+            return false;
+        case L_ERR_NOT_SEALED:
+            err = string_format( _( "You can't seal that %s!" ), tname().c_str());
+            return false;
+        case L_ERR_FULL:
+            err = string_format( _( "Your %1$s can't hold any more %2$s." ), tname().c_str(), liquid.tname().c_str());
+            return false;
+        default:
+            err = string_format( _( "Unimplemented liquid fill error '%s'." ),lferr);
+            return false;
     }
 
     // fixes #18886 - turret installation may require items with irremovable mods

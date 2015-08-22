@@ -1154,7 +1154,7 @@ bool vehicle::start_engine( const int e )
         if( einfo.fuel_type == fuel_type_muscle ) {
             add_msg( _("The %s's mechanism is out of reach!"), name.c_str() );
         } else {
-            add_msg( _("Looks like the %1$s is out of %2$s."), eng.name().c_str(),
+            add_msg( _("Looks like the %1$s is out of %2$s."), einfo.name.c_str(),
                 item::nname( einfo.fuel_type ).c_str() );
         }
         return false;
@@ -4745,12 +4745,11 @@ void vehicle::handle_trap( const tripoint &p, int part )
     }
     if( g->u.sees(p) ) {
         if( g->u.knows_trap( p ) ) {
-            //~ %1$s: name of the vehicle; %2$s: name of the related vehicle part; %3$s: trap name
             add_msg(m_bad, _("The %1$s's %2$s runs over %3$s."), name.c_str(),
-                    parts[ part ].name().c_str(), tr.name.c_str() );
+                    part_info(part).name.c_str(), tr.name.c_str() );
         } else {
             add_msg(m_bad, _("The %1$s's %2$s runs over something."), name.c_str(),
-                    parts[ part ].name().c_str() );
+                    part_info(part).name.c_str() );
         }
     }
     if (noise > 0) {
@@ -5498,10 +5497,60 @@ bool vehicle::shift_if_needed() {
 
 int vehicle::break_off( int p, int dmg )
 {
-    /* Already-destroyed part - chance it could be torn off into pieces.
-     * Chance increases with damage, and decreases with part max durability
-     * (so lights, etc are easily removed; frames and plating not so much) */
-    if( rng( 0, part_info(p).durability / 10 ) >= dmg ) {
+    if (parts[p].hp <= 0) {
+        /* Already-destroyed part - chance it could be torn off into pieces.
+         * Chance increases with damage, and decreases with part max durability
+         * (so lights, etc are easily removed; frames and plating not so much) */
+        if(rng(0, part_info(p).durability / 10) < dmg) {
+            const auto pos = global_pos() + parts[p].precalc[0];
+            if(part_info(p).location == part_location_structure) {
+                //For structural parts, remove other parts first
+                std::vector<int> parts_in_square = parts_at_relative(parts[p].mount.x, parts[p].mount.y);
+                for(int index = parts_in_square.size() - 1; index >= 0; index--) {
+                    //Ignore the frame being destroyed
+                    if(parts_in_square[index] != p) {
+                        if(parts[parts_in_square[index]].hp == 0) {
+                            //Tearing off a broken part - break it up
+                            if(g->u.sees( pos )) {
+                                add_msg(m_bad, _("The %1$s's %2$s breaks into pieces!"), name.c_str(),
+                                        part_info(parts_in_square[index]).name.c_str());
+                            }
+                            break_part_into_pieces(parts_in_square[index], pos.x, pos.y, true);
+                        } else {
+                            //Intact (but possibly damaged) part - remove it in one piece
+                            if(g->u.sees( pos )) {
+                                add_msg(m_bad, _("The %1$s's %2$s is torn off!"), name.c_str(),
+                                        part_info(parts_in_square[index]).name.c_str());
+                            }
+                            item part_as_item = parts[parts_in_square[index]].properties_to_item();
+                            tripoint dest( pos, smz );
+                            g->m.add_item_or_charges( dest, part_as_item, true );
+                            remove_part(parts_in_square[index]);
+                        }
+                    }
+                }
+                /* After clearing the frame, remove it if normally legal to do
+                 * so (it's not holding the vehicle together). At a later date,
+                 * some more complicated system (such as actually making two
+                 * vehicles from the split parts) would be ideal. */
+                if(can_unmount(p)) {
+                    if(g->u.sees( pos )) {
+                        add_msg(m_bad, _("The %1$s's %2$s is destroyed!"),
+                                name.c_str(), part_info(p).name.c_str());
+                    }
+                    break_part_into_pieces(p, pos.x, pos.y, true);
+                    remove_part(p);
+                }
+            } else {
+                //Just break it off
+                if(g->u.sees( pos )) {
+                    add_msg(m_bad, _("The %1$s's %2$s is destroyed!"),
+                                    name.c_str(), part_info(p).name.c_str());
+                }
+                break_part_into_pieces(p, pos.x, pos.y, true);
+                remove_part(p);
+            }
+        }
         return dmg;
     }
 
@@ -6083,9 +6132,9 @@ std::string vehicle_part::name() const {
     } else if( wheel_diameter() > 0 ) {
         res.insert( 0, string_format( _( "%d\" " ), wheel_diameter() ) );
     }
-
-    if( base.is_faulty() ) {
-        res += ( _( " (faulty)" ) );
+    // notify player if player can see the shot
+    if( g->u.sees( pos ) ) {
+        add_msg(_("The %1$s fires its %2$s!"), name.c_str(), part_info(p).name.c_str());
     }
 
     return res;

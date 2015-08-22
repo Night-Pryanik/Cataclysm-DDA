@@ -222,8 +222,8 @@ bool mattack::antqueen(monster *z)
 
     if( !ants.empty() ) {
         z->moves -= 100; // It takes a while
-        monster *ant = random_entry( ants );
-        if( g->u.sees( *z ) && g->u.sees( *ant ) )
+        monster *ant = &(g->zombie( random_entry( ants ) ) );
+        if (g->u.sees( *z ) && g->u.sees( *ant ))
             add_msg(m_warning, _("The %1$s feeds an %2$s and it grows!"), z->name().c_str(),
                     ant->name().c_str());
         if (ant->type->id == mon_ant_larva) {
@@ -1278,36 +1278,46 @@ bool mattack::vine(monster *z)
     std::vector<tripoint> grow;
     int vine_neighbors = 0;
     z->moves -= 100;
-    for( const tripoint &dest : g->m.points_in_radius( z->pos(), 1 ) ) {
-        Creature *critter = g->critter_at( dest );
-        if( critter != nullptr && z->attitude_to( *critter ) == Creature::Attitude::A_HOSTILE ) {
-            if( critter->uncanny_dodge() ) {
-                return true;
-            }
-
-            body_part bphit = critter->get_random_body_part();
-            critter->add_msg_player_or_npc( m_bad,
-                //~ 1$s monster name(vine), 2$s bodypart in accusative
-                _("The %1$s lashes your %2$s!"),
-                _("The %1$s lashes <npcname>'s %2$s!"),
-                z->name().c_str(),
-                body_part_name_accusative( bphit ).c_str() );
-            damage_instance d;
-            // TODO: Buff it to more "modern" numbers - 4+4 is nothing
-            d.add_damage( DT_CUT, 4 );
-            d.add_damage( DT_BASH, 4 );
-            critter->deal_damage( z, bphit, d );
-            critter->check_dead_state();
-            z->moves -= 100;
-            return true;
-        }
-
-
-        if( g->is_empty(dest) ) {
-            grow.push_back(dest);
-        } else if( monster * const z = g->critter_at<monster>( dest ) ) {
-            if( z->type->id == mon_creeper_vine ) {
-                vine_neighbors++;
+    for (int x = z->posx() - 1; x <= z->posx() + 1; x++) {
+        for (int y = z->posy() - 1; y <= z->posy() + 1; y++) {
+            tripoint dest( x, y, z->posz() );
+            Creature *critter = g->critter_at( dest );
+            if( critter != nullptr && z->attitude_to( *critter ) == Creature::Attitude::A_HOSTILE ) {
+                if ( critter->uncanny_dodge() ) {
+                    return;
+                } else {
+                    player *foe = dynamic_cast< player* >( critter );
+                    body_part bphit = critter->get_random_body_part();
+                    bool seen = g->u.sees( *critter );
+                    //~ 1$s monster name(vine), 2$s bodypart in accusative
+                    if( critter == &g->u ) {
+                        add_msg( m_bad, _("The %1$s lashes your %2$s!"), z->name().c_str(),
+                                 body_part_name_accusative(bphit).c_str() );
+			//~ 1$s shooter, 2$s - target, 3$s bodypart in accusative
+                    } else if( seen && foe != nullptr ) {
+                        add_msg( _("The %1$s lashes %2$s's %3$s!"), z->name().c_str(),
+                                 foe->disp_name().c_str(),
+                                 body_part_name_accusative(bphit).c_str() );
+			//~ 1$s monster name, 2$s bodypart in accusative
+                    } else if( seen ) {
+                        add_msg( _("The %1$s lashes %2$s!"), z->name().c_str(),
+                                 critter->disp_name().c_str() );
+                    }
+                    damage_instance d;
+                    d.add_damage( DT_CUT, 4 );
+                    d.add_damage( DT_BASH, 4 );
+                    critter->deal_damage( z, bphit, d );
+                    critter->check_dead_state();
+                    z->moves -= 100;
+                    return;
+                }
+            } else if( g->is_empty(dest) ) {
+                grow.push_back(dest);
+            } else {
+                const int zid = g->mon_at(dest);
+                if (zid > -1 && g->zombie(zid).type->id == mon_creeper_vine) {
+                    vine_neighbors++;
+                }
             }
         }
     }
@@ -2706,12 +2716,195 @@ void mattack::taze( monster *z, Creature *target )
         return;
     }
 
-    auto m_type = target->attitude_to( g->u ) == Creature::A_FRIENDLY ? m_bad : m_neutral;
-    target->add_msg_player_or_npc( m_type,
-                                   _("The %s shocks you!"),
-                                   _("The %s shocks <npcname>!"),
-                                   z->name().c_str() );
-    target->check_dead_state();
+    if( foe != nullptr ) {
+        int shock = rng(1, 5);
+        foe->apply_damage( z, bp_torso, shock * rng( 1, 3 ) );
+        foe->moves -= shock * 20;
+        auto m_type = foe == &g->u ? m_bad : m_neutral;
+        target->add_msg_player_or_npc( m_type, _("The %s shocks you!"),
+                                            _("The %s shocks <npcname>!"),
+                                            z->name().c_str() );
+        foe->check_dead_state();
+    } else if( target->is_monster() ) {
+        // From iuse::tazer, but simplified
+        monster *mon = dynamic_cast< monster* >( target );
+        int shock = rng(5, 25);
+        mon->moves -= shock * 100;
+        mon->apply_damage( z, bp_torso, shock );
+        if( g->u.sees( *z ) && g->u.sees( *mon ) ) {
+            add_msg( _("The %1$s shocks the %2$s!"), z->name().c_str(), mon->name().c_str() );
+        }
+        mon->check_dead_state();
+    }
+}
+
+void mattack::smg(monster *z, int index)
+{
+    const std::string ammo_type("9mm");
+    // Make sure our ammo isn't weird.
+    if (z->ammo[ammo_type] > 1000) {
+        debugmsg("Generated too much ammo (%d) for %s in mattack::smg", z->ammo[ammo_type], z->name().c_str());
+        z->ammo[ammo_type] = 1000;
+    }
+
+    z->reset_special(index); // Reset timer
+    Creature *target = nullptr;
+
+    if (z->friendly != 0) {
+        // Attacking monsters, not the player!
+        int boo_hoo;
+        target = z->auto_find_hostile_target( 18, boo_hoo );
+        if( target == nullptr ) {// Couldn't find any targets!
+            if(boo_hoo > 0 && g->u.sees( *z ) ) { // because that stupid oaf was in the way!
+                add_msg(m_warning, ngettext("Pointed in your direction, the %s emits an IFF warning beep.",
+                                            "Pointed in your direction, the %s emits %d annoyed sounding beeps.",
+                                            boo_hoo),
+                        z->name().c_str(), boo_hoo);
+            }
+            return;
+        }
+    } else {
+        // Not friendly; hence, firing at the player too
+        target = z->attack_target();
+        if( target == nullptr ) {
+            return;
+        }
+        int dist = rl_dist( z->pos(), target->pos() );
+        if( dist > 18 ) {
+            return;
+        }
+
+        if( !z->has_effect("targeted") ) {
+            sounds::sound(z->pos(), 6, _("beep-beep-beep!"));
+            z->add_effect("targeted", 8);
+            z->moves -= 100;
+            return;
+        }
+    }
+    npc tmp = make_fake_npc(z, 16, 8, 8, 12);
+    tmp.skillLevel("smg").level(8);
+    tmp.skillLevel("gun").level(4);
+    z->moves -= 150;   // It takes a while
+
+    if (z->ammo[ammo_type] <= 0) {
+        if (one_in(3)) {
+            sounds::sound(z->pos(), 2, _("a chk!"));
+        } else if (one_in(4)) {
+            sounds::sound(z->pos(), 6, _("boop-boop!"));
+        }
+        return;
+    }
+    if (g->u.sees( *z )) {
+        add_msg(m_warning, _("The %s fires its smg!"), z->name().c_str());
+    }
+    tmp.weapon = item("hk_mp5", 0);
+    tmp.weapon.set_curammo( ammo_type );
+    tmp.weapon.charges = std::max(z->ammo[ammo_type], 10);
+    z->ammo[ammo_type] -= tmp.weapon.charges;
+    tmp.fire_gun( target->pos(), true );
+    z->ammo[ammo_type] += tmp.weapon.charges;
+    if (target == &g->u) {
+        z->add_effect("targeted", 3);
+    }
+}
+
+void mattack::laser(monster *z, int index)
+{
+    bool sunlight = g->is_in_sunlight(z->pos());
+
+    z->reset_special(index); // Reset timer
+    Creature *target = nullptr;
+
+    if (z->friendly != 0) {   // Attacking monsters, not the player!
+        int boo_hoo;
+        target = z->auto_find_hostile_target( 18, boo_hoo);
+        if( target == nullptr ) {// Couldn't find any targets!
+            if(boo_hoo > 0 && g->u.sees( *z ) ) { // because that stupid oaf was in the way!
+                add_msg(m_warning, ngettext("Pointed in your direction, the %s emits an IFF warning beep.",
+                                            "Pointed in your direction, the %s emits %d annoyed sounding beeps.",
+                                            boo_hoo),
+                        z->name().c_str(), boo_hoo);
+            }
+            return;
+        }
+    } else {
+        // Not friendly; hence, firing at the player too
+        target = z->attack_target();
+        if( target == nullptr ) {
+            return;
+        }
+        int dist = rl_dist( z->pos(), target->pos() );
+        if( dist > 18 ) {
+            return;
+        }
+
+        if (!z->has_effect("targeted")) {
+            sounds::sound(z->pos(), 6, _("beep-beep-beep!"));
+            z->add_effect("targeted", 8);
+            z->moves -= 100;
+            return;
+        }
+    }
+    npc tmp = make_fake_npc(z, 16, 8, 8, 12);
+    tmp.skillLevel("rifle").level(8);
+    tmp.skillLevel("gun").level(4);
+    z->moves -= 150;   // It takes a while
+    if (!sunlight) {
+        if (one_in(3)) {
+            if (g->u.sees( *z )) {
+                add_msg(_("The %s's barrel spins but nothing happens!"), z->name().c_str());
+            }
+        } else if (one_in(4)) {
+            sounds::sound(z->pos(), 6, _("boop-boop!"));
+        }
+        return;
+    }
+    if (g->u.sees( *z )) {
+        add_msg(m_warning, _("The %s's barrel spins and fires!"), z->name().c_str());
+    }
+    tmp.weapon = item("cerberus_laser", 0);
+    tmp.weapon.set_curammo( "laser_capacitor" );
+    tmp.weapon.charges = 100;
+    tmp.fire_gun( target->pos(), true );
+    if (target == &g->u) {
+        z->add_effect("targeted", 3);
+    }
+}
+
+void mattack::rifle_tur(monster *z, int index)
+{
+    Creature *target;
+    if (z->friendly != 0) {
+        // Attacking monsters, not the player!
+        int boo_hoo;
+        target = z->auto_find_hostile_target( 18, boo_hoo );
+        if( target == nullptr ) {// Couldn't find any targets!
+            if( boo_hoo > 0 && g->u.sees( *z ) ) { // because that stupid oaf was in the way!
+                add_msg(m_warning, ngettext("Pointed in your direction, the %s emits an IFF warning beep.",
+                                            "Pointed in your direction, the %s emits %d annoyed sounding beeps.",
+                                            boo_hoo),
+                        z->name().c_str(), boo_hoo);
+            }
+            return;
+        }
+
+        z->reset_special(index);
+        rifle( z, target );
+    } else {
+        // (This is a bit generous: 5.56 has 38 range.)
+        // Not friendly; hence, firing at the player too
+        target = z->attack_target();
+        if( target == nullptr ) {
+            return;
+        }
+        int dist = rl_dist( z->pos(), target->pos() );
+        if( dist > 18 ) {
+            return;
+        }
+
+        z->reset_special(index);
+        rifle( z, target );
+    }
 }
 
 void mattack::rifle( monster *z, Creature *target )
@@ -3513,13 +3706,16 @@ bool mattack::stretch_bite(monster *z)
 
     z->moves -= 150;
 
-    for (auto &pnt : g->m.find_clear_path( z->pos(), target->pos() ) ){
-        if( g->m.impassable( pnt ) ){
-            z->add_effect( effect_stunned, 6);
+    ter_t terrain;
+    for (auto &i : line){
+        terrain = g->m.ter_at( i );
+        //head's not going to fit through the bars
+        if (terrain.movecost == 0 ){
+            z->add_effect("stunned", 6);
             target->add_msg_player_or_npc( _("The %1$s stretches its head at you, but bounces off the %2$s"),
                                            _("The %1$s stretches its head at <npcname>, but bounces off the %2$s"),
-                                           z->name().c_str(), g->m.obstacle_name( pnt ).c_str() );
-            return true;
+                                           z->name().c_str(), terrain.name.c_str() );
+            return;
         }
     }
     bool uncanny = target->uncanny_dodge();
@@ -3684,6 +3880,10 @@ bool mattack::lunge(monster *z)
         return false;
     }
 
+    z->reset_special(index); // Reset timer
+    if( seen ) {
+        add_msg(_("The %1$s lunges straight into %2$s!"), z->name().c_str(), target->disp_name().c_str() );
+    }
     z->moves -= 100;
 
     if( target->uncanny_dodge()) {
@@ -4592,11 +4792,13 @@ bool mattack::stretch_attack(monster *z)
 
     int dam = rng(5, 10);
     z->moves -= 100;
-    for( auto &pnt : g->m.find_clear_path( z->pos(), target->pos() ) ) {
-            if( g->m.impassable( pnt ) ) {
-                add_msg( _( "The %1$s thrusts its arm at you but bounces off the %2$s" ), z->name().c_str(),
-                         g->m.obstacle_name( pnt ).c_str() );
-                return true;
+    z->reset_special(index);
+    ter_t terrain;
+    for (auto &i : line){
+            terrain = g->m.ter_at( i );
+            if (!(terrain.id == "t_bars") && terrain.movecost == 0 ){
+                add_msg( _("The %1$s thrusts its arm at you but bounces off the %2$s"), z->name().c_str(), terrain.name.c_str() );
+                return;
             }
     }
 

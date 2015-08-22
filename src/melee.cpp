@@ -1579,8 +1579,83 @@ std::string player::melee_special_effects(Creature &t, damage_instance &d, const
         remove_weapon();
     }
 
-    if( !t.is_hallucination() ) {
-        handle_melee_wear( weapon );
+    handle_melee_wear();
+
+    bool is_hallucination = false; //Check if the target is an hallucination.
+    if(monster *m = dynamic_cast<monster *>(&t)) { //Cast fails if the t is an NPC or the player.
+        is_hallucination = m->is_hallucination();
+    }
+
+    // The skill used to counter stuck penalty
+    const bool stab = d.type_damage(DT_STAB) > d.type_damage(DT_CUT);
+    int used_skill = stab ? get_skill_level("stabbing") : get_skill_level("cutting");
+    if( has_active_bionic("bio_cqb") ) {
+        used_skill = 5;
+    }
+
+    int cutting_penalty = roll_stuck_penalty( stab, tec );
+    // Some weapons splatter a lot of blood around.
+    // TODO: this function shows total damage done by this attack, not final damage inflicted.
+    if (d.total_damage() > 10 && weapon.has_flag("MESSY") ) { //Check if you do non minor damage
+        cutting_penalty /= 6; // Harder to get stuck
+        //Get blood type.
+        field_id type_blood = fd_blood;
+        if(!is_hallucination || t.has_flag(MF_VERMIN)) {
+            type_blood = t.bloodType();
+        } else {
+            type_blood = fd_null;
+        }
+        if(type_blood != fd_null) {
+            tripoint tmp;
+            tmp.z = tarpos.z;
+            for( tmp.x = tarpos.x - 1; tmp.x <= tarpos.x + 1; tmp.x++ ) {
+                for( tmp.y = tarpos.y - 1; tmp.y <= tarpos.y + 1; tmp.y++ ) {
+                    if( !one_in(3) ) {
+                        g->m.add_field( tmp, type_blood, 1, 0 );
+                    }
+                }
+            }
+        }
+    }
+    // Getting your weapon stuck
+    if (!unarmed_attack() && cutting_penalty > dice(str_cur * 2, 20) && !is_hallucination) {
+        dump << string_format(_("Your %1$s gets stuck in %2$s, pulling it out of your hands!"),
+                              weapon.tname().c_str(), target.c_str());
+        // TODO: better speed debuffs for target, possibly through effects
+        if (monster *m = dynamic_cast<monster *>(&t)) {
+            m->add_item(remove_weapon());
+        } else {
+            // Happens if 't' is not of 'monster' origin (attacking an NPC)
+            g->m.add_item_or_charges( tarpos, remove_weapon(), 1 );
+        }
+
+        t.mod_moves(-30);
+        if (weapon.has_flag("HURT_WHEN_PULLED") && one_in(3)) {
+            //Sharp objects that injure wielder when pulled from hands (so cutting damage only)
+            dump << std::endl << string_format(_("You are hurt by the %s being pulled from your hands!"),
+                                               weapon.tname().c_str());
+            auto hand_hurt = one_in(2) ? bp_hand_l : bp_hand_r;
+            deal_damage( this, hand_hurt, damage_instance::physical( 0, weapon.damage_cut() / 2, 0) );
+        }
+    } else {
+        // Approximately "this would kill the target". Unless the target has limb-based hp.
+        if( d.total_damage() > t.get_hp() ) {
+            cutting_penalty /= 2;
+            cutting_penalty -= rng( used_skill, used_skill * 2 + 2);
+        }
+        if( cutting_penalty >= 50 && !is_hallucination ) {
+            dump << string_format(_("Your %1$s gets stuck in %2$s but you yank it free!"), weapon.tname().c_str(),
+                                  target.c_str());
+        }
+
+        if( weapon.has_flag("SPEAR") ) {
+            const int stabbing_skill = get_skill_level("stabbing");
+            d.add_damage( DT_CUT, rng( 1, stabbing_skill ) ); //add some extra damage for pulling out a spear
+            t.mod_moves(-30);
+        }
+    }
+    if (cutting_penalty > 0) {
+        mod_moves(-cutting_penalty);
     }
 
     // on-hit effects for martial arts
@@ -1596,87 +1671,353 @@ damage_instance hardcoded_mutation_attack( const player &u, const trait_id &id )
         // a better way to simulate target's anti-peck efforts
         /** @EFFECT_DEX increases number of hits with BEAK_PECK */
 
-        /** @EFFECT_UNARMED increases number of hits with BEAK_PECK */
-        int num_hits = std::max( 1, std::min<int>( 6, u.get_dex() + u.get_skill_level( skill_unarmed ) - rng( 4, 10 ) ) );
-        return damage_instance::physical( 0, 0, num_hits * 10 );
-    }
-
-    if( id == "ARM_TENTACLES" || id == "ARM_TENTACLES_4" || id == "ARM_TENTACLES_8" ) {
-        int num_attacks = 1;
-        if( id == "ARM_TENTACLES_4" ) {
-            num_attacks = 3;
-        } else if( id == "ARM_TENTACLES_8" ) {
-            num_attacks = 7;
-        }
-        if( u.weapon.is_two_handed( u ) || !u.has_two_arms() || u.worn_with_flag( "RESTRICT_HANDS" ) ) {
-            num_attacks--;
-        }
-
-        if( num_attacks <= 0 ) {
-            return damage_instance();
-        }
-
-        const bool rake = u.has_trait( trait_CLAWS_TENTACLE );
-
-        /** @EFFECT_STR increases damage with ARM_TENTACLES* */
-        damage_instance ret;
-        if( rake ) {
-            ret.add_damage( DT_CUT, u.get_str() / 2.0f + 1.0f, 0, 1.0f, num_attacks );
+    if ( (has_trait("SABER_TEETH")) && !wearing_something_on(bp_mouth) &&
+         one_in(20 - dex_cur - get_skill_level("unarmed")) ) {
+        special_attack tmp;
+        tmp.stab = (25 + str_cur);
+        if (is_player()) {
+            tmp.text = string_format(_("You tear into %s with your saber teeth!"),
+                                     target.c_str());
+        } else if (male) {
+            tmp.text = string_format(_("%1$s tears into %2$s with his saber teeth!"),
+                                     name.c_str(), target.c_str());
         } else {
-            ret.add_damage( DT_BASH, u.get_str() / 3.0f + 1.0f, 0, 1.0f, num_attacks );
+            tmp.text = string_format(_("%1$s tears into %2$s with her saber teeth!"),
+                                     name.c_str(), target.c_str());
+        }
+        ret.push_back(tmp);
+    }
+
+    // Having lupine or croc jaws makes it much easier to sink your fangs into people;
+    // Ursine/Feline, not so much.  Rat is marginally better.
+    if (has_trait("FANGS") && (!wearing_something_on(bp_mouth)) &&
+        ((!has_trait("MUZZLE") && !has_trait("MUZZLE_LONG") && !has_trait("MUZZLE_RAT") &&
+          one_in(20 - dex_cur - get_skill_level("unarmed"))) ||
+         (has_trait("MUZZLE_RAT") && one_in(19 - dex_cur - get_skill_level("unarmed"))) ||
+         (has_trait("MUZZLE") && one_in(18 - dex_cur - get_skill_level("unarmed"))) ||
+         (has_trait("MUZZLE_LONG") && one_in(15 - dex_cur - get_skill_level("unarmed"))))) {
+        special_attack tmp;
+        tmp.stab = 20;
+        if (is_player()) {
+            tmp.text = string_format(_("You sink your fangs into %s!"),
+                                     target.c_str());
+        } else if (male) {
+            tmp.text = string_format(_("%1$s sinks his fangs into %2$s!"),
+                                     name.c_str(), target.c_str());
+        } else {
+            tmp.text = string_format(_("%1$s sinks her fangs into %2$s!"),
+                                     name.c_str(), target.c_str());
+        }
+        ret.push_back(tmp);
+    }
+
+    if (has_trait("INCISORS") && one_in(18 - dex_cur - get_skill_level("unarmed")) &&
+        (!wearing_something_on(bp_mouth))) {
+        special_attack tmp;
+        tmp.cut = 3;
+        tmp.bash = 3;
+        if (is_player()) {
+            tmp.text = string_format(_("You bite into %s with your ratlike incisors!"),
+                                     target.c_str());
+        } else if (male) {
+            tmp.text = string_format(_("%1$s bites %2$s with his ratlike incisors!"),
+                                     name.c_str(), target.c_str());
+        } else {
+            tmp.text = string_format(_("%1$s bites %2$s with her ratlike incisors!"),
+                                     name.c_str(), target.c_str());
+        }
+        ret.push_back(tmp);
+    }
+
+    if (!has_trait("FANGS") && has_trait("MUZZLE") &&
+        one_in(18 - dex_cur - get_skill_level("unarmed")) &&
+        (!wearing_something_on(bp_mouth))) {
+        special_attack tmp;
+        tmp.cut = 4;
+        if (is_player()) {
+            tmp.text = string_format(_("You nip at %s!"),
+                                     target.c_str());
+        } else if (male) {
+            tmp.text = string_format(_("%1$s nips and harries %2$s!"),
+                                     name.c_str(), target.c_str());
+        } else {
+            tmp.text = string_format(_("%1$s nips and harries %2$s!"),
+                                     name.c_str(), target.c_str());
         }
 
-        return ret;
+    if (!has_trait("FANGS") && has_trait("MUZZLE_BEAR") &&
+        one_in(20 - dex_cur - get_skill_level("unarmed")) &&
+        (!wearing_something_on(bp_mouth))) {
+        special_attack tmp;
+        tmp.cut = 5;
+        if (is_player()) {
+            tmp.text = string_format(_("You bite %s!"),
+                                     target.c_str());
+        } else if (male) {
+            tmp.text = string_format(_("%1$s bites %2$s!"),
+                                     name.c_str(), target.c_str());
+        } else {
+            tmp.text = string_format(_("%1$s bites %2$s!"),
+                                     name.c_str(), target.c_str());
+        }
+
+    if (!has_trait("FANGS") && has_trait("MUZZLE_LONG") &&
+        one_in(18 - dex_cur - get_skill_level("unarmed")) &&
+        (!wearing_something_on(bp_mouth))) {
+        special_attack tmp;
+        tmp.stab = 18;
+        if (is_player()) {
+            tmp.text = string_format(_("You bite a chunk out of %s!"),
+                                     target.c_str());
+        } else if (male) {
+            tmp.text = string_format(_("%1$s bites a chunk out of %2$s!"),
+                                     name.c_str(), target.c_str());
+        } else {
+            tmp.text = string_format(_("%1$s bites a chunk out of %2$s!"),
+                                     name.c_str(), target.c_str());
+        }
+        ret.push_back(tmp);
     }
 
-    if( id == "VINES2" || id == "VINES3" ) {
-        const int num_attacks = id == "VINES2" ? 2 : 3;
-        /** @EFFECT_STR increases damage with VINES* */
-        damage_instance ret;
-        ret.add_damage( DT_BASH, u.get_str() / 2.0f, 0, 1.0f, num_attacks );
-        return ret;
+    if ((has_trait("MANDIBLES") || (has_trait("FANGS_SPIDER") && !has_active_mutation("FANGS_SPIDER"))) &&
+        one_in(22 - dex_cur - get_skill_level("unarmed")) && (!wearing_something_on(bp_mouth))) {
+        special_attack tmp;
+        tmp.cut = 12;
+        if (is_player()) {
+            tmp.text = string_format(_("You slice %s with your mandibles!"),
+                                     target.c_str());
+        } else if (male) {
+            tmp.text = string_format(_("%1$s slices %2$s with his mandibles!"),
+                                     name.c_str(), target.c_str());
+        } else {
+            tmp.text = string_format(_("%1$s slices %2$s with her mandibles!"),
+                                     name.c_str(), target.c_str());
+        }
+        ret.push_back(tmp);
+    }
+    if (has_active_mutation("FANGS_SPIDER") && one_in(24 - dex_cur - get_skill_level("unarmed")) &&
+        (!wearing_something_on(bp_mouth)) ) {
+        special_attack tmp;
+        tmp.stab = 15;
+        if (is_player()) {
+            tmp.text = string_format(_("You bite %s with your fangs!"),
+                                     target.c_str());
+        } else if (male) {
+            tmp.text = string_format(_("%1$s bites %2$s with his fangs!"),
+                                     name.c_str(), target.c_str());
+        } else {
+            tmp.text = string_format(_("%1$s bites %2$s with her fangs!"),
+                                     name.c_str(), target.c_str());
+        }
+        ret.push_back(tmp);
     }
 
-    debugmsg( "Invalid hardcoded mutation id: %s", id.c_str() );
-    return damage_instance();
-}
+    if (has_trait("BEAK") && one_in(15 - dex_cur - get_skill_level("unarmed")) &&
+        (!wearing_something_on(bp_mouth))) {
+        special_attack tmp;
+        tmp.stab = 15;
+        if (is_player()) {
+            tmp.text = string_format(_("You peck %s!"),
+                                     target.c_str());
+        } else {
+            tmp.text = string_format(_("%1$s pecks %2$s!"),
+                                     name.c_str(), target.c_str());
+        }
+        ret.push_back(tmp);
+    }
 
-std::vector<special_attack> player::mutation_attacks(Creature &t) const
-{
-    std::vector<special_attack> ret;
-
-    std::string target = t.disp_name();
-
-    const auto usable_body_parts = exclusive_flag_coverage( "ALLOWS_NATURAL_ATTACKS" );
-    const auto &unarmed = (int)get_skill_level( skill_unarmed );
-
-    for( const auto &pr : my_mutations ) {
-        const auto &branch = pr.first.obj();
-        for( const auto &mut_atk : branch.attacks_granted ) {
-            // Covered body part
-            if( mut_atk.bp != num_bp && !usable_body_parts[ mut_atk.bp ] ) {
-                continue;
+    if (has_trait("BEAK_PECK") && one_in(15 - dex_cur - get_skill_level("unarmed")) &&
+        (!wearing_something_on(bp_mouth))) {
+        // method open to improvement, please feel free to suggest
+        // a better way to simulate target's anti-peck efforts
+        int num_hits = (dex_cur + get_skill_level("unarmed") - rng(4, 10));
+        if (num_hits <= 0) {
+            num_hits = 1;
+        }
+        // Yeah, arbitrary balance cap of Unfunness. :-(
+        // Though this is a 6-second turn, so only so much
+        // time to peck your target.
+        if (num_hits >= 5) {
+            num_hits = 5;
+        }
+        special_attack tmp;
+        tmp.stab = (num_hits *= 10 );
+        if (num_hits == 1) {
+            if (is_player()) {
+                tmp.text = string_format(_("You peck %s!"),
+                                         target.c_str());
+            } else {
+                tmp.text = string_format(_("%1$s pecks %2$s!"),
+                                         name.c_str(), target.c_str());
             }
-
-            /** @EFFECT_UNARMED increases chance of attacking with mutated body parts */
-            /** @EFFECT_DEX increases chance of attacking with mutated body parts */
-
-            // Calculate actor ability value to be compared against mutation attack difficulty and add debug message
-            const int proc_value = get_dex() + unarmed;
-            add_msg( m_debug, "%s proc chance: %d in %d", pr.first.c_str(), proc_value, mut_atk.chance );
-            // If the mutation attack fails to proc, bail out
-            if( !x_in_y( proc_value, mut_atk.chance ) ) {
-                continue;
+        }
+        //~"jackhammering" with the beak is metaphor for the rapid-peck
+        //~commonly employed by a woodpecker drilling into wood
+        else {
+            if (is_player()) {
+                tmp.text = string_format(_("You jackhammer into %s with your beak!"),
+                                         target.c_str());
+            } else if (male) {
+                tmp.text = string_format(_("%1$s jackhammers into %2$s with his beak!"),
+                                         name.c_str(), target.c_str());
+            } else {
+                tmp.text = string_format(_("%1$s jackhammers into %2$s with her beak!"),
+                                         name.c_str(), target.c_str());
             }
+        }
+        ret.push_back(tmp);
+    }
 
-            // If player has any blocker, bail out
-            if( std::any_of( mut_atk.blocker_mutations.begin(), mut_atk.blocker_mutations.end(),
-                [this]( const trait_id &blocker ) {
-                    return has_trait( blocker );
-                } ) ) {
-                add_msg( m_debug, "%s not procing: blocked", pr.first.c_str() );
-                continue;
-            }
+    if (has_trait("HOOVES") && one_in(25 - dex_cur - 2 * get_skill_level("unarmed"))) {
+        special_attack tmp;
+        tmp.bash = str_cur * 3;
+        if (tmp.bash > 40) {
+            tmp.bash = 40;
+        }
+        if (is_player()) {
+            tmp.text = string_format(_("You kick %s with your hooves!"),
+                                     target.c_str());
+        } else if (male) {
+            tmp.text = string_format(_("%1$s kicks %2$s with his hooves!"),
+                                     name.c_str(), target.c_str());
+        } else {
+            tmp.text = string_format(_("%1$s kicks %2$s with her hooves!"),
+                                     name.c_str(), target.c_str());
+        }
+        ret.push_back(tmp);
+    }
+
+    if (has_trait("RAP_TALONS") && one_in(30 - dex_cur - 2 * get_skill_level("unarmed"))) {
+        special_attack tmp;
+        tmp.cut = str_cur * 4;
+        if (tmp.cut > 60) {
+            tmp.cut = 60;
+        }
+        if (is_player()) {
+            tmp.text = string_format(_("You slash %s with a talon!"),
+                                     target.c_str());
+        } else if (male) {
+            tmp.text = string_format(_("%1$s slashes %2$s with a talon!"),
+                                     name.c_str(), target.c_str());
+        } else {
+            tmp.text = string_format(_("%1$s slashes %2$s with a talon!"),
+                                     name.c_str(), target.c_str());
+        }
+        ret.push_back(tmp);
+    }
+
+    if (has_trait("HORNS") && one_in(20 - dex_cur - get_skill_level("unarmed"))) {
+        special_attack tmp;
+        tmp.bash = 3;
+        tmp.stab = 3;
+        if (is_player()) {
+            tmp.text = string_format(_("You headbutt %s with your horns!"),
+                                     target.c_str());
+        } else if (male) {
+            tmp.text = string_format(_("%1$s headbutts %2$s with his horns!"),
+                                     name.c_str(), target.c_str());
+        } else {
+            tmp.text = string_format(_("%1$s headbutts %2$s with her horns!"),
+                                     name.c_str(), target.c_str());
+        }
+        ret.push_back(tmp);
+    }
+
+    if (has_trait("HORNS_CURLED") && one_in(20 - dex_cur - get_skill_level("unarmed"))) {
+        special_attack tmp;
+        tmp.bash = 14;
+        if (is_player()) {
+            tmp.text = string_format(_("You headbutt %s with your curled horns!"),
+                                     target.c_str());
+        } else if (male) {
+            tmp.text = string_format(_("%1$s headbutts %2$s with his curled horns!"),
+                                     name.c_str(), target.c_str());
+        } else {
+            tmp.text = string_format(_("%1$s headbutts %2$s with her curled horns!"),
+                                     name.c_str(), target.c_str());
+        }
+        ret.push_back(tmp);
+    }
+
+    if (has_trait("HORNS_POINTED") && one_in(22 - dex_cur - get_skill_level("unarmed"))) {
+        special_attack tmp;
+        tmp.stab = 24;
+        if (is_player()) {
+            tmp.text = string_format(_("You stab %s with your pointed horns!"),
+                                     target.c_str());
+        } else {
+            tmp.text = string_format(_("%1$s stabs %2$s with their pointed horns!"),
+                                     name.c_str(), target.c_str());
+        }
+        ret.push_back(tmp);
+    }
+
+    if (has_trait("ANTLERS") && one_in(20 - dex_cur - get_skill_level("unarmed"))) {
+        special_attack tmp;
+        tmp.bash = 4;
+        if (is_player()) {
+            tmp.text = string_format(_("You butt %s with your antlers!"),
+                                     target.c_str());
+        } else if (male) {
+            tmp.text = string_format(_("%1$s butts %2$s with his antlers!"),
+                                     name.c_str(), target.c_str());
+        } else {
+            tmp.text = string_format(_("%1$s butts %2$s with her antlers!"),
+                                     name.c_str(), target.c_str());
+        }
+        ret.push_back(tmp);
+    }
+
+    if ( ((has_trait("TAIL_STING") && one_in(3)) || has_active_mutation("TAIL_STING")) &&
+      one_in(10 - dex_cur)) {
+        special_attack tmp;
+        tmp.stab = 20;
+        if (is_player()) {
+            tmp.text = string_format(_("You sting %s with your tail!"),
+                                     target.c_str());
+        } else if (male) {
+            tmp.text = string_format(_("%1$s stings %2$s with his tail!"),
+                                     name.c_str(), target.c_str());
+        } else {
+            tmp.text = string_format(_("%1$s stings %2$s with her tail!"),
+                                     name.c_str(), target.c_str());
+        }
+        ret.push_back(tmp);
+    }
+
+    if ( ((has_trait("TAIL_CLUB") && one_in(3)) || has_active_mutation("TAIL_CLUB")) &&
+      one_in(10 - dex_cur)) {
+        special_attack tmp;
+        tmp.bash = 18;
+        if (is_player()) {
+            tmp.text = string_format(_("You club %s with your tail!"),
+                                     target.c_str());
+        } else if (male) {
+            tmp.text = string_format(_("%1$s clubs %2$s with his tail!"),
+                                     name.c_str(), target.c_str());
+        } else {
+            tmp.text = string_format(_("%1$s clubs %2$s with her tail!"),
+                                     name.c_str(), target.c_str());
+        }
+        ret.push_back(tmp);
+    }
+
+    if (((has_trait("TAIL_THICK") && one_in(3)) || has_active_mutation("TAIL_THICK")) &&
+      one_in(10 - dex_cur)) {
+        special_attack tmp;
+        tmp.bash = 8;
+        if (is_player()) {
+            tmp.text = string_format(_("You whap %s with your tail!"),
+                                     target.c_str());
+        } else if (male) {
+            tmp.text = string_format(_("%1$s whaps %2$s with his tail!"),
+                                     name.c_str(), target.c_str());
+        } else {
+            tmp.text = string_format(_("%1$s whaps %2$s with her tail!"),
+                                     name.c_str(), target.c_str());
+        }
+        ret.push_back(tmp);
+    }
 
             // Player must have all needed traits
             if( !std::all_of( mut_atk.required_mutations.begin(), mut_atk.required_mutations.end(),
@@ -1688,13 +2029,25 @@ std::vector<special_attack> player::mutation_attacks(Creature &t) const
             }
 
             special_attack tmp;
-            // Ugly special case: player's strings have only 1 variable, NPC have 2
-            // Can't use <npcname> here
-            // @todo Fix
-            if( is_player() ) {
-                tmp.text = string_format( _( mut_atk.attack_text_u.c_str() ), target.c_str() );
+            // Tentacle Rakes add additional cutting damage
+            if (is_player()) {
+                if (has_trait("CLAWS_TENTACLE")) {
+                    tmp.text = string_format(_("You rake %s with your tentacle!"),
+                                             target.c_str());
+                } else tmp.text = string_format(_("You slap %s with your tentacle!"),
+                                                    target.c_str());
+            } else if (male) {
+                if (has_trait("CLAWS_TENTACLE")) {
+                    tmp.text = string_format(_("%1$s rakes %2$s with his tentacle!"),
+                                             name.c_str(), target.c_str());
+                } else tmp.text = string_format(_("%1$s slaps %2$s with his tentacle!"),
+                                                    name.c_str(), target.c_str());
             } else {
-                tmp.text = string_format( _( mut_atk.attack_text_npc.c_str() ), name.c_str(), target.c_str() );
+                if (has_trait("CLAWS_TENTACLE")) {
+                    tmp.text = string_format(_("%1$s rakes %2$s with her tentacle!"),
+                                             name.c_str(), target.c_str());
+                } else tmp.text = string_format(_("%1$s slaps %2$s with her tentacle!"),
+                                                    name.c_str(), target.c_str());
             }
 
             // Attack starts here
@@ -1709,10 +2062,22 @@ std::vector<special_attack> player::mutation_attacks(Creature &t) const
                 tmp.damage = dam;
             }
 
-            if( tmp.damage.total_damage() > 0.0f ) {
-                ret.emplace_back( tmp );
+    if (has_trait("VINES2") || has_trait("VINES3")) {
+        int num_attacks = 2;
+        if (has_trait("VINES3")) {
+            num_attacks = 3;
+        }
+        for (int i = 0; i < num_attacks; i++) {
+            special_attack tmp;
+            if (is_player()) {
+                tmp.text = string_format(_("You lash %s with a vine!"),
+                                         target.c_str());
+            } else if (male) {
+                tmp.text = string_format(_("%1$s lashes %2$s with his vines!"),
+                                         name.c_str(), target.c_str());
             } else {
-                add_msg( m_debug, "%s not procing: zero damage", pr.first.c_str() );
+                tmp.text = string_format(_("%1$s lashes %2$s with her vines!"),
+                                         name.c_str(), target.c_str());
             }
         }
     }

@@ -2813,9 +2813,9 @@ void talk_function::assign_base( npc &p )
         return;
     }
 
-    add_msg(_("%1$s waits at %2$s"), p.name.c_str(), camp->camp_name().c_str());
-    p.mission = NPC_MISSION_BASE;
-    p.attitude = NPCATT_NULL;
+    add_msg(_("%1$s waits at %2$s"), p->name.c_str(), camp->camp_name().c_str());
+    p->mission = NPC_MISSION_BASE;
+    p->attitude = NPCATT_NULL;
 }
 
 void talk_function::assign_guard( npc &p )
@@ -2882,9 +2882,8 @@ void talk_function::give_equipment( npc &p )
     if (chosen == -1) {
         chosen = 0;
     }
-    item it = *giving[chosen].loc.get_item();
-    giving[chosen].loc.remove_item();
-    popup(_("%1$s gives you a %2$s"), p.name.c_str(), it.tname().c_str());
+    item it = p->i_rem(giving[chosen].itm);
+    popup(_("%1$s gives you a %2$s"), p->name.c_str(), it.tname().c_str());
 
     g->u.i_add( it );
     p.op_of_u.owed -= giving[chosen].price;

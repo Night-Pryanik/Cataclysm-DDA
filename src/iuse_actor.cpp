@@ -531,10 +531,9 @@ long consume_drug_iuse::use(player *p, item *it, bool, const tripoint& ) const
     for( auto tool = tools_needed.cbegin(); tool != tools_needed.cend(); ++tool ) {
         // Amount == -1 means need one, but don't consume it.
         if( !p->has_amount( tool->first, 1 ) ) {
-            p->add_msg_player_or_say( _("You need %1$s to consume %2$s!"),
-                _("I need a %1$s to consume %2$s!"),
-                item::nname( tool->first ).c_str(),
-                it->type_name( 1 ).c_str() );
+            p->add_msg_if_player( _("You need %1$s to consume %2$s!"),
+                                  item::nname( tool->first ).c_str(),
+                                  it->type_name( 1 ).c_str() );
             return -1;
         }
     }
@@ -543,10 +542,9 @@ long consume_drug_iuse::use(player *p, item *it, bool, const tripoint& ) const
         // Amount == -1 means need one, but don't consume it.
         if( !p->has_charges( consumable->first, (consumable->second == -1) ?
                              1 : consumable->second ) ) {
-            p->add_msg_player_or_say( _("You need %1$s to consume %2$s!"),
-                _("I need a %1$s to consume %2$s!"),
-                item::nname( consumable->first ).c_str(),
-                it->type_name( 1 ).c_str() );
+            p->add_msg_if_player( _("You need %1$s to consume %2$s!"),
+                                  item::nname( consumable->first ).c_str(),
+                                  it->type_name( 1 ).c_str() );
             return -1;
         }
     }
@@ -683,8 +681,8 @@ long place_monster_iuse::use( player *p, item *it, bool, const tripoint &pos ) c
             ammo_item.charges = std::min( available, amdef.second );
             p->use_charges( amdef.first, ammo_item.charges );
             //~ First %s is the ammo item (with plural form and count included), second is the monster name
-            p->add_msg_if_player( ngettext( "You load %1$d x %2$s round into the %3$s.",
-                                            "You load %1$d x %2$s rounds into the %3$s.", ammo_item.charges ),
+            p->add_msg_if_player( ngettext( "You load %d x %1$s round into the %2$s.",
+                                            "You load %d x %1$s rounds into the %2$s.", ammo_item.charges ),
                                   ammo_item.charges, ammo_item.type_name( ammo_item.charges ).c_str(),
                                   newmon.name().c_str() );
             amdef.second = ammo_item.charges;

@@ -1093,7 +1093,17 @@ void monster::melee_attack( Creature &target, bool, const matec_id&, int hitspre
         }
     }
 
-    const int stab_cut = dealt_dam.type_damage( DT_CUT ) + dealt_dam.type_damage( DT_STAB );
+    dealt_damage_instance dealt_dam;
+    int hitspread = other.deal_melee_attack( this, hit_roll() );
+    if( hitspread >= 0 ) {
+        other.deal_melee_hit( this, hitspread, false, damage, dealt_dam );
+        if( g->u.sees(*this) ) {
+            add_msg(_("The %1$s hits the %2$s!"), name().c_str(), other.name().c_str());
+        }
+    } else {
+        if( g->u.sees( *this ) ) {
+            add_msg(_("The %1$s misses the %2$s!"), name().c_str(), other.name().c_str());
+        }
 
     if( stab_cut > 0 && has_flag( MF_VENOM ) ) {
         target.add_msg_if_player( m_bad, _("You're poisoned!") );
