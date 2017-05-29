@@ -740,13 +740,11 @@ void mdeath::broken_ammo(monster *z)
 
 void make_mon_corpse(monster *z, int damageLvl)
 {
-    item corpse = item::make_corpse( z->type->id, calendar::turn, z->unique_name );
-    corpse.set_damage( damageLvl );
-    if( z->has_effect( effect_pacified) && z->type->in_species( ZOMBIE ) ) {
-        // Pacified corpses have a chance of becoming un-pacified when regenerating.
-        corpse.set_var( "zlave", one_in(2) ? "zlave" : "mutilated" );
-    }
-    if (z->has_effect( effect_no_ammo)) {
+    const int MAX_DAM = 4;
+    item corpse;
+    corpse.make_corpse( z->type->id, calendar::turn, z->unique_name );
+    corpse.damage = damageLvl > MAX_DAM ? MAX_DAM : damageLvl;
+    if (z->has_effect("no_ammo")) {
         corpse.set_var("no_ammo", "no_ammo");
     }
     g->m.add_item_or_charges(z->pos(), corpse);
